@@ -92,11 +92,19 @@ type OVNKubeLayer struct {
 	CrashLoop     bool   `json:"crashLoop"`
 }
 
+type NetworkLayer struct {
+	AnnotationsOK bool     `json:"annotationsOK"`
+	MissingAnnots []string `json:"missingAnnots,omitempty"`
+	NodeSubnets   string   `json:"nodeSubnets,omitempty"`
+	Zone          string   `json:"zone,omitempty"`
+}
+
 type OVNNodeHealth struct {
 	NodeName     string       `json:"nodeName"`
 	OverallState HealthState  `json:"overallState"`
 	Node         NodeLayer    `json:"node"`
 	OVNKube      OVNKubeLayer `json:"ovnKube"`
+	Network      NetworkLayer `json:"network"`
 	Findings     []Finding    `json:"findings,omitempty"`
 }
 

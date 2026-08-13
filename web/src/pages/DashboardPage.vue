@@ -106,6 +106,7 @@
             <th>Node</th>
             <th>State</th>
             <th>Ready</th>
+            <th>Annots</th>
             <th>OVN pod</th>
             <th>Restarts Δ</th>
           </tr>
@@ -115,15 +116,26 @@
             <td class="text-mono">{{ n.nodeName }}</td>
             <td>{{ n.overallState }}</td>
             <td>{{ n.node?.ready ? 'yes' : 'no' }}</td>
+            <td>{{ n.network?.annotationsOK === false ? 'drift' : 'ok' }}</td>
             <td class="text-mono">{{ n.ovnKube?.podName || '—' }}</td>
             <td><strong>{{ n.ovnKube?.restartsDelta ?? 0 }}</strong> / {{ n.ovnKube?.restarts ?? 0 }}</td>
           </tr>
         </tbody>
       </table>
+      <div v-if="ovnFindings.length" class="q-mt-md">
+        <div class="dasm-stat-label q-mb-xs">Findings</div>
+        <ul class="ovn-tl">
+          <li v-for="f in ovnFindings" :key="f.id">
+            <q-badge dense :color="findingColor(f.severity)" text-color="white">{{ f.ruleId }}</q-badge>
+            {{ f.summary }}
+            <span v-if="f.node" class="text-grey-7"> · {{ f.node }}</span>
+          </li>
+        </ul>
+      </div>
       <div v-if="ovnSnap.timeline?.length" class="q-mt-md">
         <div class="dasm-stat-label q-mb-xs">Timeline</div>
         <ul class="ovn-tl">
-          <li v-for="(t, i) in ovnSnap.timeline.slice(0, 12)" :key="i">
+          <li v-for="(t, i) in ovnSnap.timeline.slice(0, 16)" :key="i">
             <span class="text-mono">{{ fmtTime(t.at) }}</span> · {{ t.summary }}
             <span v-if="t.node" class="text-grey-7"> ({{ t.node }})</span>
           </li>
@@ -265,6 +277,16 @@ const gateClass = computed(() => {
   if (lvl === 'WARNING') return 'is-warn'
   return 'is-ok'
 })
+const ovnFindings = computed(() => {
+  const list = (ovnSnap.value?.findings || []).filter((f) =>
+    ['WARNING', 'ERROR', 'CRITICAL', 'NOTICE'].includes(f.severity))
+  return list.slice(0, 20)
+})
+function findingColor(sev) {
+  if (sev === 'CRITICAL' || sev === 'ERROR') return 'negative'
+  if (sev === 'WARNING') return 'warning'
+  return 'grey-7'
+}
 const ovnStateColor = computed(() => {
   switch (ovnSnap.value?.overallState) {
     case 'HEALTHY': return 'positive'

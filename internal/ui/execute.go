@@ -501,6 +501,28 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			}
 			run.appendLog("info", string(phase), batch, msg)
 			run.mapPhase(phase, batch, msg)
+			// OVN diagnoser: sample after each batch measurement + final (not kube-burner metrics).
+			if !dryRun && (phase == runner.PhaseBatchMeasurement || phase == runner.PhaseFinalMeasurement) {
+				if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil {
+					bid := batch
+					scanLogs := phase == runner.PhaseFinalMeasurement || batch%3 == 0
+					go func() {
+						sctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+						defer cancel()
+						snap, err := ovndiag.SampleWith(sctx, live.Clientset(), s.ovnBaseline(), g.RunID, run.Cluster, bid, ovndiag.SampleOpts{
+							ScanLogs:    scanLogs,
+							MaxLogPods:  6,
+							EventWindow: 15 * time.Minute,
+						})
+						if err != nil {
+							run.appendLog("warn", "OVNDIAG", bid, err.Error())
+							return
+						}
+						id, _ := ovndiag.WriteSnapshot(s.RunDir, snap)
+						run.appendLog("info", "OVNDIAG", bid, fmt.Sprintf("%s · findings=%d · snapshot %s", snap.OverallState, len(snap.Findings), id))
+					}()
+				}
+			}
 		},
 	}
 

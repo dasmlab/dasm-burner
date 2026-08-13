@@ -41,6 +41,13 @@ func (b *Baseline) RestartWatermark(pod string) (int, bool) {
 	return v, ok
 }
 
+func (b *Baseline) ReadyWatermark(node string) (bool, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	v, ok := b.Ready[node]
+	return v, ok
+}
+
 func (b *Baseline) At() time.Time {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

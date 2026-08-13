@@ -1,4 +1,4 @@
-# OVN-Kube Diagnoser (v0.2)
+# OVN-Kube Diagnoser (v0.2 / `development`)
 
 First-class component on the `development` branch. **Not** a kube-burner metrics consumer.
 
@@ -7,48 +7,60 @@ First-class component on the `development` branch. **Not** a kube-burner metrics
 | Workload apply / convergence / Prom index | kube-burner + existing report |
 | “Is OVN-Kubernetes becoming unhealthy as load is injected, and what is the earliest evidence?” | **`internal/ovndiag`** |
 
-## Architecture (target)
+## Architecture
 
 ```
 BENCHMARK RUN
      │
 ┌────┴────┐
 │         │
-kube-burner   OVN Diagnoser (continuous inspection)
-│             Nodes / OVN pods / events / OVN·OVS / DB / dataplane
+kube-burner   OVN Diagnoser (active cluster interrogation)
+│             L1 Nodes · L2 ovnkube pods · events · logs · L5 annotations
 │                      │
-│               Findings + Timeline + Health state
+│               Findings + Timeline + Why? + Health state
 └──────────┬───────────┘
            ▼
-    Diagnostic report / UI panel
+    Diagnostic snapshot / UI panel
 ```
+
+Execute hooks: baseline at run open; sample on each `BATCH_MEASUREMENT` / `FINAL_MEASUREMENT` (log scan every 3rd batch + final).
 
 ## Layers
 
-| Layer | Focus | MVP on this branch |
-|-------|--------|-------------------|
-| L1 | Node conditions + transitions | yes |
-| L2 | OVN-Kube pod health + restart deltas | yes |
-| L3 | Process CPU/mem (via metrics when available) | stub |
-| L4 | OVN DB latency / connectivity | stub |
-| L5 | Network config consistency | stub |
-| L6 | Dataplane probes (pod/svc/route) | stub |
-| L7 | Correlation to batch lifecycle | yes (batch markers) |
+| Layer | Focus | Status on `development` |
+|-------|--------|-------------------------|
+| L1 | Node conditions + Ready vs baseline | yes |
+| L2 | OVN-Kube pod health + restart Δ | yes |
+| L3 | Process CPU/mem | stub (metrics later) |
+| L4 | OVN DB latency | stub |
+| L5 | `k8s.ovn.org/*` annotation consistency | yes |
+| L6 | Dataplane probes | stub |
+| L7 | Batch correlation (OVN603) | yes |
+| — | Warning event aggregation | yes |
+| — | Targeted log class scanner | yes |
+
+Annotation keys checked (observed on OCP 4.21 OVN cluster):  
+`node-subnets`, `l3-gateway-config`, `node-primary-ifaddr`, `host-cidrs`, `node-chassis-id`.
 
 ## Package layout
 
 ```
 internal/ovndiag/
+  discovery.go   Capability discovery (no OCP minor hard-coding)
   types.go       HealthState, Finding, Evidence, OVNNodeHealth, Snapshot
-  catalog.go     Rule IDs OVN001…
-  baseline.go    Per-node baseline samples + anomaly vs range
-  watch.go       Periodic ClusterWatch → Snapshot
-  evaluate.go    L1/L2 evaluators → findings
-  correlate.go   Batch markers → timeline
+  catalog.go     Rule IDs OVN001…OVN603
+  baseline.go    Per-node / pod watermarks
+  sample.go      L1/L2/L5 evaluate + assemble Snapshot
+  network.go     Annotation drift
+  events.go      Normalized Warning event buckets
+  logs.go        Classed log tail (ERROR/WARN/CONNECTION/…)
+  correlate.go   Multi-category → OVN603
   store.go       Immutable snapshot under runDir/ovndiag/
 ```
 
-API: `GET /api/v1/ovndiag` (latest), `POST /api/v1/ovndiag/baseline`, `POST /api/v1/ovndiag/sample`  
-UI: OVN Diagnoser panel on Health (overall + per-node + timeline).
+API: `GET /api/v1/ovndiag`, `POST /api/v1/ovndiag/baseline`, `POST /api/v1/ovndiag/sample`  
+UI: Health page — overall / per-node / findings / timeline / Why?
 
-Capability discovery (OCP/OVN version) gates later layers — do not hard-code OpenShift minor assumptions.
+## Preview GitOps
+
+Ship on `development` via preview path only — see [DEVELOPER.md](DEVELOPER.md). Do not merge to `main` until diagnoser is proven on a preview URL.

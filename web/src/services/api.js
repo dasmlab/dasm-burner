@@ -37,6 +37,8 @@ export const cancelRun = () => api.post('/runs/cancel').then((r) => r.data)
 export const clearRunLog = () => api.post('/runs/clear').then((r) => r.data)
 export const getCleanupStatus = (template) =>
   api.get('/cleanup', { params: template ? { template } : {} }).then((r) => r.data)
+export const checkCleanupState = (body) =>
+  api.post('/cleanup/check', body || {}).then((r) => r.data)
 export const postCleanup = (body) => api.post('/cleanup', body, { timeout: 60_000 }).then((r) => r.data)
 export const checkCleanupState = (body) =>
   api.post('/cleanup/check', body || {}).then((r) => r.data)
