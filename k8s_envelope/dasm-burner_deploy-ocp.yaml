@@ -93,9 +93,6 @@ spec:
         app: dasm-burner
     spec:
       serviceAccountName: dasm-burner-sa
-      # Needed until ghcr.io/dasmlab/dasm-burner package visibility is Public.
-      imagePullSecrets:
-        - name: dasmlab-ghcr-pull
       containers:
         - name: dasm-burner
           image: ghcr.io/dasmlab/dasm-burner:__VERSION__
