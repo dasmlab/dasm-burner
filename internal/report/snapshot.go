@@ -44,6 +44,16 @@ type Meta struct {
 	Finished time.Time
 	Desired  DesiredCounts
 	Open     kube.Health // sampled before apply batches (may be zero)
+	Logs     []RunLogLine
+}
+
+// RunLogLine is one Execute canvas line frozen into the snapshot.
+type RunLogLine struct {
+	At      time.Time `json:"at"`
+	Level   string    `json:"level"`
+	Phase   string    `json:"phase,omitempty"`
+	Batch   int       `json:"batch,omitempty"`
+	Message string    `json:"message"`
 }
 
 // SnapshotID builds a stable id: {runId}-{finishedUnix}.
@@ -87,6 +97,8 @@ func Freeze(apply *runner.Report, collectedDir string, meta Meta) (*Document, er
 	doc.Started = started
 	doc.Finished = fin
 	doc.Desired = meta.Desired
+	doc.Logs = meta.Logs
+	fillRunTiming(doc, apply)
 	if doc.RunID == "" && apply != nil {
 		doc.RunID = apply.RunID
 	}
@@ -137,6 +149,36 @@ func Freeze(apply *runner.Report, collectedDir string, meta Meta) (*Document, er
 	return doc, nil
 }
 
+// fillRunTiming sets wall-clock Duration / DurationMs and apply-mode helpers.
+func fillRunTiming(doc *Document, apply *runner.Report) {
+	if doc == nil {
+		return
+	}
+	started, fin := doc.Started, doc.Finished
+	if started.IsZero() && apply != nil && !apply.Started.IsZero() {
+		started = apply.Started
+		doc.Started = started
+	}
+	if fin.IsZero() && apply != nil && !apply.Finished.IsZero() {
+		fin = apply.Finished
+		doc.Finished = fin
+	}
+	if !started.IsZero() && !fin.IsZero() && !fin.Before(started) {
+		d := fin.Sub(started)
+		doc.DurationMs = d.Milliseconds()
+		doc.Duration = d.Round(time.Second).String()
+	} else if apply != nil && apply.Duration > 0 {
+		doc.DurationMs = apply.Duration.Milliseconds()
+		doc.Duration = apply.Duration.Round(time.Second).String()
+	}
+	if apply != nil {
+		doc.Mode = apply.Mode
+		doc.BatchCount = len(apply.Batches)
+		doc.ApplyDuration = apply.Duration.Round(time.Second).String()
+		doc.ApplyDurationMs = apply.Duration.Milliseconds()
+	}
+}
+
 func openHighlights(meta Meta, des DesiredCounts) []string {
 	out := []string{
 		fmt.Sprintf("template %s", orDash(meta.Template)),
@@ -176,7 +218,8 @@ func closeHighlights(apply *runner.Report) []string {
 			h.OVNReady, h.OVNPods, h.OVNRestartsDelta, h.OVNRestarts),
 		fmt.Sprintf("managed Ready %d/%d · OOM %d · warn events %d",
 			h.ManagedReady, h.ManagedPods, h.OOMKilled, h.WarningEvents),
-		fmt.Sprintf("mode %s · duration %s · batches %d", apply.Mode, apply.Duration, len(apply.Batches)),
+		fmt.Sprintf("mode %s · apply duration %s · batches %d",
+			apply.Mode, apply.Duration.Round(time.Second), len(apply.Batches)),
 	}
 	for _, p := range h.OVNDetail {
 		if p.RestartsDelta > 0 || !p.Ready {
@@ -253,6 +296,9 @@ type ListItem struct {
 	GeneratedAt        time.Time `json:"generatedAt"`
 	Started            time.Time `json:"started,omitempty"`
 	Finished           time.Time `json:"finished,omitempty"`
+	Duration           string    `json:"duration,omitempty"`
+	DurationMs         int64     `json:"durationMs,omitempty"`
+	BatchCount         int       `json:"batchCount,omitempty"`
 	ConvergenceOverall float64   `json:"convergenceOverall,omitempty"`
 	OpenHeadline       string    `json:"openHeadline,omitempty"`
 	CloseHeadline      string    `json:"closeHeadline,omitempty"`
@@ -289,6 +335,9 @@ func ListSnapshots(runDir string) ([]ListItem, error) {
 			GeneratedAt:   doc.GeneratedAt,
 			Started:       doc.Started,
 			Finished:      doc.Finished,
+			Duration:      doc.Duration,
+			DurationMs:    doc.DurationMs,
+			BatchCount:    doc.BatchCount,
 			OpenHeadline:  doc.Open.Headline,
 			CloseHeadline: doc.Close.Headline,
 		}

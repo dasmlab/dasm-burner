@@ -38,12 +38,27 @@ func TestFreezeAndListSnapshots(t *testing.T) {
 		Finished: apply.Finished,
 		Desired:  DesiredCounts{Namespaces: 3, Pods: 18, Services: 6, Routes: 6, Deployments: 6},
 		Open:     open,
+		Logs: []RunLogLine{
+			{At: apply.Started, Level: "info", Phase: "PRECHECK", Message: "ok"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !doc.Immutable || doc.SnapshotID == "" || doc.Open.Headline == "" || doc.Close.Headline == "" {
 		t.Fatalf("%+v", doc)
+	}
+	if doc.DurationMs <= 0 || doc.Duration == "" {
+		t.Fatalf("expected wall duration, got duration=%q ms=%d", doc.Duration, doc.DurationMs)
+	}
+	if doc.ApplyDurationMs <= 0 || doc.BatchCount != 0 {
+		// BatchCount 0 is fine when Batches empty; apply duration must be set
+		if doc.ApplyDurationMs <= 0 {
+			t.Fatalf("expected apply duration ms, got %d", doc.ApplyDurationMs)
+		}
+	}
+	if len(doc.Logs) != 1 {
+		t.Fatalf("expected frozen logs, got %d", len(doc.Logs))
 	}
 	id, err := WriteSnapshot(dir, doc, apply)
 	if err != nil {
@@ -59,11 +74,13 @@ func TestFreezeAndListSnapshots(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].SnapshotID != id {
 		t.Fatalf("%v %+v", err, list)
 	}
+	if list[0].DurationMs <= 0 || list[0].Duration == "" {
+		t.Fatalf("list missing duration: %+v", list[0])
+	}
 	got, err := LoadSnapshot(dir, id)
 	if err != nil || got.RunID != "6a98" || !got.Immutable {
 		t.Fatalf("%v %+v", err, got)
 	}
-	// Ensure cleanup-sensitive fields are frozen copies, not empty
 	if got.Close.Health == nil || got.Close.Health.ManagedReady != 18 {
 		t.Fatalf("close health: %+v", got.Close.Health)
 	}

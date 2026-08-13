@@ -19,27 +19,34 @@ import (
 // When Immutable is true, Health/Open/Close were frozen at end of run and must not
 // be refreshed from the live cluster (cleanup would otherwise rewrite history).
 type Document struct {
-	GeneratedAt    time.Time          `json:"generatedAt"`
-	SnapshotID     string             `json:"snapshotId,omitempty"`
-	Immutable      bool               `json:"immutable,omitempty"`
-	RunID          string             `json:"runId,omitempty"`
-	Prefix         string             `json:"prefix,omitempty"`
-	Template       string             `json:"template,omitempty"`
-	Cluster        string             `json:"cluster,omitempty"`
-	Status         string             `json:"status,omitempty"`
-	DryRun         bool               `json:"dryRun,omitempty"`
-	Started        time.Time          `json:"started,omitempty"`
-	Finished       time.Time          `json:"finished,omitempty"`
-	Desired        DesiredCounts      `json:"desired,omitempty"`
-	Open           SummaryBox         `json:"open,omitempty"`
-	Close          SummaryBox         `json:"close,omitempty"`
-	Health         kube.Health        `json:"health"`
-	Apply          *runner.Report     `json:"apply,omitempty"`
-	JobSummary     map[string]any     `json:"jobSummary,omitempty"`
-	Metrics        map[string]Summary `json:"metrics,omitempty"`
-	Alerts         []map[string]any   `json:"alerts,omitempty"`
-	MetricsArchive string             `json:"metricsArchive,omitempty"`
-	Narrative      string             `json:"narrative"`
+	GeneratedAt     time.Time          `json:"generatedAt"`
+	SnapshotID      string             `json:"snapshotId,omitempty"`
+	Immutable       bool               `json:"immutable,omitempty"`
+	RunID           string             `json:"runId,omitempty"`
+	Prefix          string             `json:"prefix,omitempty"`
+	Template        string             `json:"template,omitempty"`
+	Cluster         string             `json:"cluster,omitempty"`
+	Status          string             `json:"status,omitempty"`
+	DryRun          bool               `json:"dryRun,omitempty"`
+	Started         time.Time          `json:"started,omitempty"`
+	Finished        time.Time          `json:"finished,omitempty"`
+	Duration        string             `json:"duration,omitempty"`   // wall-clock human
+	DurationMs      int64              `json:"durationMs,omitempty"` // wall-clock ms
+	Mode            string             `json:"mode,omitempty"`
+	BatchCount      int                `json:"batchCount,omitempty"`
+	ApplyDuration   string             `json:"applyDuration,omitempty"`
+	ApplyDurationMs int64              `json:"applyDurationMs,omitempty"`
+	Desired         DesiredCounts      `json:"desired,omitempty"`
+	Open            SummaryBox         `json:"open,omitempty"`
+	Close           SummaryBox         `json:"close,omitempty"`
+	Health          kube.Health        `json:"health"`
+	Apply           *runner.Report     `json:"apply,omitempty"`
+	JobSummary      map[string]any     `json:"jobSummary,omitempty"`
+	Metrics         map[string]Summary `json:"metrics,omitempty"`
+	Alerts          []map[string]any   `json:"alerts,omitempty"`
+	MetricsArchive  string             `json:"metricsArchive,omitempty"`
+	Logs            []RunLogLine       `json:"logs,omitempty"`
+	Narrative       string             `json:"narrative"`
 }
 
 type Summary struct {
@@ -211,8 +218,27 @@ func narrative(doc *Document) string {
 		b.WriteString(".\n")
 	}
 	if doc.Template != "" || doc.Cluster != "" {
-		b.WriteString(fmt.Sprintf("Template `%s` · cluster `%s` · status `%s`.\n\n",
+		b.WriteString(fmt.Sprintf("Template `%s` · cluster `%s` · status `%s`.\n",
 			orDash(doc.Template), orDash(doc.Cluster), orDash(doc.Status)))
+	}
+	if !doc.Started.IsZero() || !doc.Finished.IsZero() || doc.Duration != "" {
+		b.WriteString("\n## Timing\n\n")
+		if !doc.Started.IsZero() {
+			b.WriteString(fmt.Sprintf("- started: %s\n", doc.Started.Format(time.RFC3339)))
+		}
+		if !doc.Finished.IsZero() {
+			b.WriteString(fmt.Sprintf("- finished: %s\n", doc.Finished.Format(time.RFC3339)))
+		}
+		if doc.Duration != "" {
+			b.WriteString(fmt.Sprintf("- wall duration: %s (%d ms)\n", doc.Duration, doc.DurationMs))
+		}
+		if doc.ApplyDuration != "" {
+			b.WriteString(fmt.Sprintf("- apply duration: %s (%d ms)\n", doc.ApplyDuration, doc.ApplyDurationMs))
+		}
+		if doc.BatchCount > 0 {
+			b.WriteString(fmt.Sprintf("- batches: %d · mode: %s\n", doc.BatchCount, orDash(doc.Mode)))
+		}
+		b.WriteString("\n")
 	}
 	if doc.Open.Headline != "" {
 		b.WriteString("## Open\n\n" + doc.Open.Headline + "\n")
@@ -254,11 +280,14 @@ func narrative(doc *Document) string {
 	}
 	if doc.Apply != nil {
 		b.WriteString(fmt.Sprintf("Apply mode %s duration %s convergence %.1f%% aborted=%v.\n",
-			doc.Apply.Mode, doc.Apply.Duration, doc.Apply.Convergence.Overall, doc.Apply.Aborted))
+			doc.Apply.Mode, doc.Apply.Duration.Round(time.Second), doc.Apply.Convergence.Overall, doc.Apply.Aborted))
 		if doc.Apply.AbortReason != "" {
 			b.WriteString("Abort: " + doc.Apply.AbortReason + "\n")
 		}
 		b.WriteString("\n")
+	}
+	if len(doc.Logs) > 0 {
+		b.WriteString(fmt.Sprintf("## Execute log\n\n%d line(s) frozen from the live canvas.\n\n", len(doc.Logs)))
 	}
 	if len(doc.Metrics) > 0 {
 		b.WriteString("## Prometheus / kube-burner\n\n")

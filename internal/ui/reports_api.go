@@ -104,12 +104,10 @@ func desiredFromGraph(g *topology.Graph) report.DesiredCounts {
 }
 
 func (s *Server) persistRunSnapshot(run *execRun, g *topology.Graph, apply *runner.Report, open kube.Health, status string, dryRun bool) (string, error) {
-	if apply == nil {
-		return "", nil
-	}
 	fin := time.Now()
 	started := fin
 	tmpl, cluster, pfx, rid := "", "", "", ""
+	var logs []report.RunLogLine
 	if run != nil {
 		run.mu.Lock()
 		tmpl = run.Template
@@ -122,13 +120,20 @@ func (s *Server) persistRunSnapshot(run *execRun, g *topology.Graph, apply *runn
 		if run.Finished != nil {
 			fin = *run.Finished
 		}
+		for _, l := range run.Logs {
+			logs = append(logs, report.RunLogLine{
+				At: l.At, Level: l.Level, Phase: l.Phase, Batch: l.Batch, Message: l.Message,
+			})
+		}
 		run.mu.Unlock()
 	}
-	if apply != nil && !apply.Finished.IsZero() {
-		fin = apply.Finished
-	}
-	if apply != nil && !apply.Started.IsZero() {
+	// Wall-clock Started/Finished come from the Execute session (includes measure/index).
+	// Apply timing is captured separately as ApplyDuration*.
+	if started.IsZero() && apply != nil && !apply.Started.IsZero() {
 		started = apply.Started
+	}
+	if fin.IsZero() && apply != nil && !apply.Finished.IsZero() {
+		fin = apply.Finished
 	}
 	if pfx == "" && rid != "" {
 		pfx = prefixForRun(rid)
@@ -146,10 +151,14 @@ func (s *Server) persistRunSnapshot(run *execRun, g *topology.Graph, apply *runn
 		Finished: fin,
 		Desired:  desiredFromGraph(g),
 		Open:     open,
+		Logs:     logs,
 	}
 	doc, err := report.Freeze(apply, filepath.Join(s.RunDir, "kube-burner", "collected"), meta)
 	if err != nil {
 		return "", err
+	}
+	if doc.RunID == "" {
+		doc.RunID = rid
 	}
 	return report.WriteSnapshot(s.RunDir, doc, apply)
 }

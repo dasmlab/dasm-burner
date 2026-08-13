@@ -168,6 +168,8 @@ type completedMix struct {
 	Cluster            string    `json:"cluster,omitempty"`
 	Status             string    `json:"status,omitempty"`
 	Finished           time.Time `json:"finished,omitempty"`
+	Duration           string    `json:"duration,omitempty"`
+	DurationMs         int64     `json:"durationMs,omitempty"`
 	ConvergenceOverall float64   `json:"convergenceOverall,omitempty"`
 	CloseHeadline      string    `json:"closeHeadline,omitempty"`
 }
@@ -194,6 +196,8 @@ func (s *Server) completedForCluster(cluster string) []completedMix {
 			Cluster:            item.Cluster,
 			Status:             item.Status,
 			Finished:           item.Finished,
+			Duration:           item.Duration,
+			DurationMs:         item.DurationMs,
 			ConvergenceOverall: item.ConvergenceOverall,
 			CloseHeadline:      item.CloseHeadline,
 		})

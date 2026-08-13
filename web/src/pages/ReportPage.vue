@@ -43,6 +43,7 @@
               </div>
               <div class="snap-meta">
                 {{ fmt(r.finished || r.generatedAt) }}
+                <span v-if="r.duration"> · {{ r.duration }}</span>
                 <span v-if="r.template"> · {{ r.template }}</span>
               </div>
               <div class="snap-close text-caption">{{ r.closeHeadline || r.openHeadline }}</div>
@@ -65,11 +66,36 @@
                   run <span class="text-mono">{{ selected.runId }}</span>
                   <span v-if="selected.prefix"> · {{ selected.prefix }}</span>
                   <span v-if="selected.cluster"> · {{ selected.cluster }}</span>
+                  <span v-if="selected.template"> · {{ selected.template }}</span>
                 </div>
               </div>
               <div class="text-right">
                 <div class="dasm-stat" v-if="conv != null">{{ Number(conv).toFixed(1) }}%</div>
                 <div class="dasm-stat-label">convergence</div>
+              </div>
+            </div>
+
+            <div class="row q-col-gutter-md q-mt-md timing-row">
+              <div class="col-6 col-sm-3">
+                <div class="dasm-stat-label">Started</div>
+                <div>{{ fmt(selected.started) || '—' }}</div>
+              </div>
+              <div class="col-6 col-sm-3">
+                <div class="dasm-stat-label">Ended</div>
+                <div>{{ fmt(selected.finished) || '—' }}</div>
+              </div>
+              <div class="col-6 col-sm-3">
+                <div class="dasm-stat-label">Wall duration</div>
+                <div class="text-weight-bold">{{ selected.duration || '—' }}</div>
+                <div class="text-caption text-grey-7" v-if="selected.durationMs">{{ selected.durationMs }} ms</div>
+              </div>
+              <div class="col-6 col-sm-3">
+                <div class="dasm-stat-label">Apply / batches</div>
+                <div>{{ selected.applyDuration || '—' }}</div>
+                <div class="text-caption text-grey-7">
+                  {{ selected.batchCount || 0 }} batches
+                  <span v-if="selected.mode"> · {{ selected.mode }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -202,6 +228,23 @@
               Archive in snapshot: <span class="text-mono">metrics/{{ selected.metricsArchive }}</span>
             </div>
           </div>
+
+          <q-expansion-item
+            v-if="(selected.logs || []).length"
+            class="dasm-panel q-mb-md box-exp"
+            expand-separator
+            icon="terminal"
+            label="Execute log"
+            :caption="`${selected.logs.length} frozen line(s)`"
+          >
+            <div class="q-pa-md log-canvas">
+              <div v-for="(line, i) in selected.logs" :key="i" class="log-line" :class="`lv-${line.level}`">
+                <span class="log-ts">{{ fmt(line.at) }}</span>
+                <span class="log-phase">{{ line.phase }}{{ line.batch ? ` #${line.batch}` : '' }}</span>
+                <span>{{ line.message }}</span>
+              </div>
+            </div>
+          </q-expansion-item>
 
           <q-expansion-item
             class="dasm-panel q-mb-md box-exp"
@@ -374,4 +417,20 @@ onMounted(load)
 .ovn-table tr.is-hot td {
   background: #fff4f0;
 }
+.log-canvas {
+  max-height: 360px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  background: #0f1720;
+  color: #d7e0ea;
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+.log-line { margin-bottom: 0.2rem; }
+.log-ts { color: #7f93a8; margin-right: 0.55rem; }
+.log-phase { color: #9db4c7; margin-right: 0.45rem; }
+.lv-error { color: #ff8f8f; }
+.lv-warn { color: #ffd27a; }
+.timing-row { border-top: 1px solid var(--dasm-border-soft); padding-top: 0.75rem; }
 </style>

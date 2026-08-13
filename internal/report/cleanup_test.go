@@ -12,15 +12,15 @@ func TestWriteListCleanupReport(t *testing.T) {
 	started := time.Now().Add(-2 * time.Minute)
 	finished := time.Now()
 	doc := &CleanupReport{
-		Scope:    "all",
-		Template: "smoke500",
-		Cluster:  "test-ovn-perf",
-		Status:   "passed",
-		Started:  started,
-		Finished: finished,
-		RunIDs:   []string{"6a98"},
-		Targeted: CleanupObjectTotals{Namespaces: 10, Services: 20, Pods: 60},
-		DeletedNS: 10,
+		Scope:      "all",
+		Template:   "smoke500",
+		Cluster:    "test-ovn-perf",
+		Status:     "passed",
+		Started:    started,
+		Finished:   finished,
+		RunIDs:     []string{"6a98"},
+		Targeted:   CleanupObjectTotals{Namespaces: 10, Services: 20, Pods: 60},
+		DeletedNS:  10,
 		Namespaces: []string{"kb-6a98-ns-00001-xxxx"},
 		Logs: []CleanupLogLine{
 			{At: started, Level: "info", Message: "start"},

@@ -151,7 +151,10 @@
               · {{ c.status || '—' }}
               <span v-if="c.convergenceOverall != null"> · {{ Number(c.convergenceOverall).toFixed(0) }}%</span>
             </div>
-            <div class="text-caption text-grey-7">{{ fmtTime(c.finished) }}</div>
+            <div class="text-caption text-grey-7">
+              {{ fmtTime(c.finished) }}
+              <span v-if="c.duration"> · {{ c.duration }}</span>
+            </div>
             <div class="mix-card__actions">
               <q-btn
                 flat

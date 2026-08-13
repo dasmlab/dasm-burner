@@ -331,17 +331,15 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 		run.mu.Unlock()
 
 		snapID := ""
-		if lastRep != nil {
-			if id, err := s.persistRunSnapshot(run, g, lastRep, openHealth, status, dryRun); err == nil && id != "" {
-				snapID = id
-				run.mu.Lock()
-				run.SnapshotID = id
-				run.ReportURL = "/report?id=" + id
-				run.mu.Unlock()
-				run.appendLog("info", "REPORT", 0, "immutable snapshot "+id)
-			} else if err != nil {
-				run.appendLog("warn", "REPORT", 0, "snapshot failed: "+err.Error())
-			}
+		if id, err := s.persistRunSnapshot(run, g, lastRep, openHealth, status, dryRun); err == nil && id != "" {
+			snapID = id
+			run.mu.Lock()
+			run.SnapshotID = id
+			run.ReportURL = "/report?id=" + id
+			run.mu.Unlock()
+			run.appendLog("info", "REPORT", 0, "immutable snapshot "+id)
+		} else if err != nil {
+			run.appendLog("warn", "REPORT", 0, "snapshot failed: "+err.Error())
 		}
 
 		if !dryRun && rid != "" {
