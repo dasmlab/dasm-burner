@@ -46,6 +46,20 @@
               {{ deployLabel }}
             </q-chip>
             <span v-if="deployPrefix" class="text-caption text-mono">{{ deployPrefix }}</span>
+            <q-btn
+              flat
+              dense
+              size="sm"
+              color="primary"
+              icon="sync"
+              label="Refresh / check state"
+              :loading="checking"
+              :disable="running || cleaning"
+              @click="checkState('manual refresh')"
+            />
+          </div>
+          <div class="text-caption text-grey-7 q-mt-xs">
+            State is live for <strong>{{ cluster.currentLabel.value }}</strong> only — flip clusters and refresh.
           </div>
         </div>
       </div>
@@ -209,6 +223,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   cancelRun,
+  checkCleanupState,
   clearRunLog,
   getCleanupStatus,
   getRun,
@@ -230,11 +245,14 @@ const allowLarge = ref(false)
 const skipBaseline = ref(true)
 const starting = ref(false)
 const cleaning = ref(false)
+const checking = ref(false)
 const run = ref(null)
 const logEl = ref(null)
 const deploy = ref(null)
 const managedTotal = ref(null)
+const deployCluster = ref('')
 let timer = null
+let cleanupPoll = null
 
 const templateOptions = computed(() =>
   templates.value.map((t) => ({
@@ -262,12 +280,13 @@ const deployOnline = computed(() => Boolean(deploy.value?.deployed))
 const deployPrefix = computed(() => deploy.value?.prefix || '')
 const deployLabel = computed(() => {
   if (!deploy.value) return 'deploy status…'
+  const on = deployCluster.value || cluster.currentLabel.value
   if (deploy.value.deployed) {
     const n = deploy.value.count || 0
-    return `online / still deployed (${n} NS)`
+    return `online on ${on} (${n} NS)`
   }
-  if (deploy.value.label === 'unknown') return 'no recorded real run'
-  return 'cleaned'
+  if (deploy.value.label === 'unknown') return `no recorded run · checked ${on}`
+  return `cleaned on ${on}`
 })
 const deployChipColor = computed(() => {
   if (deployOnline.value) return 'warning'
@@ -307,16 +326,52 @@ async function refreshDeploy() {
     const data = await getCleanupStatus(templateName.value)
     deploy.value = data.template || null
     managedTotal.value = data.managedTotal ?? null
+    deployCluster.value = data.cluster || cluster.currentLabel.value
   } catch {
-    /* cluster may be unreachable */
+    deploy.value = { deployed: false, label: 'unknown' }
   }
 }
 
-async function onTemplate(name) {
-  if (!name) return
-  await selectTemplate(name)
-  await refreshTemplates()
-  await refreshDeploy()
+async function checkState(reason) {
+  error.value = ''
+  checking.value = true
+  try {
+    const data = await checkCleanupState({
+      template: templateName.value,
+      reason: reason || 'manual refresh',
+    })
+    if (data.run) run.value = data.run
+    deploy.value = data.template || null
+    managedTotal.value = data.managedTotal ?? null
+    deployCluster.value = data.cluster || cluster.currentLabel.value
+    await nextTick()
+    if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+  } finally {
+    checking.value = false
+  }
+}
+
+function startCleanupPoll() {
+  stopCleanupPoll()
+  cleanupPoll = setInterval(async () => {
+    try {
+      const data = await getRun()
+      run.value = data.run
+      await nextTick()
+      if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
+    } catch {
+      /* ignore */
+    }
+  }, 800)
+}
+
+function stopCleanupPoll() {
+  if (cleanupPoll) {
+    clearInterval(cleanupPoll)
+    cleanupPoll = null
+  }
 }
 
 async function poll() {
@@ -325,7 +380,7 @@ async function poll() {
     run.value = data.run
     await nextTick()
     if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
-    if (!running.value) await refreshDeploy()
+    if (!running.value && !cleaning.value) await refreshDeploy()
   } catch {
     /* ignore poll errors */
   }
@@ -372,16 +427,24 @@ async function clearLog() {
   }
 }
 
+async function onTemplate(name) {
+  if (!name) return
+  await selectTemplate(name)
+  await refreshTemplates()
+  await checkState('template selected')
+}
+
 async function doCleanup(scope) {
   error.value = ''
   cleanupMsg.value = ''
   const labels = {
-    last: 'Clean last run for this template?',
-    template: 'Clean ALL recorded runs for this template?',
-    all: 'Clean ALL managed kb-* namespaces from every session/template?',
+    last: 'Clean last run for this template on the CURRENT cluster?',
+    template: 'Clean ALL recorded runs for this template on the CURRENT cluster?',
+    all: 'Clean ALL managed kb-* namespaces on the CURRENT cluster (every session/template)?',
   }
   if (!window.confirm(labels[scope] || 'Clean?')) return
   cleaning.value = true
+  startCleanupPoll()
   try {
     const data = await postCleanup({
       scope,
@@ -389,12 +452,19 @@ async function doCleanup(scope) {
       wait: true,
       dryRun: false,
     })
+    if (data.run) run.value = data.run
     const deleted = (data.results || []).reduce((n, r) => n + (r.namespaces?.length || 0), 0)
-    cleanupMsg.value = `Cleanup ${scope}: deleted ${deleted} namespace(s).`
+    const failed = (data.results || []).some((r) => r.error)
+    cleanupMsg.value = failed
+      ? `Cleanup ${scope} finished with errors — see live log.`
+      : `Cleanup ${scope}: deleted ${deleted} namespace(s) on ${data.cluster || cluster.currentLabel.value}.`
     await refreshDeploy()
+    await poll()
   } catch (e) {
     error.value = e.response?.data?.error || e.message
+    await poll()
   } finally {
+    stopCleanupPoll()
     cleaning.value = false
   }
 }
@@ -403,12 +473,20 @@ watch(templateName, () => {
   refreshDeploy()
 })
 
+watch(
+  () => cluster.currentName.value,
+  async (name, prev) => {
+    if (!name || name === prev) return
+    await checkState(`cluster switched to ${name}`)
+  },
+)
+
 onMounted(async () => {
   try {
     await refreshTemplates()
     if (!cluster.ready.value) await cluster.refresh()
     await poll()
-    await refreshDeploy()
+    await checkState('page load')
   } catch (e) {
     error.value = e.response?.data?.error || e.message
   }
@@ -417,6 +495,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  stopCleanupPoll()
 })
 </script>
 
