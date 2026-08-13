@@ -139,16 +139,33 @@ jobs:
           docker rm -f "${cid}" 2>/dev/null || true
           # Ensure docker has the tag we just pushed (buildah vs docker stores).
           docker pull "${IMG}"
-          docker run -d --name "${cid}" -p 18080:8080 "${IMG}"
+          # Avoid host port collisions — hit the container network IP directly (mock-me pattern).
+          docker run -d --name "${cid}" "${IMG}"
           trap 'docker rm -f "${cid}" 2>/dev/null || true' EXIT
+          ip=""
           for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1 || \
-               curl -fsS http://127.0.0.1:18080/api/v1/version >/dev/null 2>&1; then
+            ip="$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${cid}" 2>/dev/null || true)"
+            if [ -n "${ip}" ]; then
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "${ip}" ]; then
+            echo "ERROR: no container IP"
+            docker logs "${cid}" || true
+            exit 1
+          fi
+          echo "smoke via http://${ip}:8080"
+          for _ in $(seq 1 60); do
+            if curl -fsS "http://${ip}:8080/healthz" >/dev/null 2>&1; then
+              curl -fsS "http://${ip}:8080/api/v1/version"
+              echo
               exit 0
             fi
             sleep 2
           done
           docker logs "${cid}" || true
+          docker inspect "${cid}" || true
           exit 1
 
       - name: Ensure HAProxy CERT for prod FQDN
