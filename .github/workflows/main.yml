@@ -94,30 +94,39 @@ jobs:
           echo "GHCR_TOKEN=${token}" >> "$GITHUB_ENV"
           echo "Token length: ${#token}"
 
-      - name: Build and push
+      - name: Build image
         env:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
         run: |
           set -euo pipefail
           IMG="ghcr.io/dasmlab/dasm-burner:${VERSION_TAG}"
+          # Same engine preference as mock-me on bld-249-runner: buildah → docker.
           if command -v buildah >/dev/null 2>&1; then
-            buildah bud -f deployments/containers/Containerfile --build-arg "BUILD_VERSION=${VERSION_TAG}" -t "${IMG}" .
+            buildah bud \
+              --build-arg BUILD_VERSION="${VERSION_TAG}" \
+              -f deployments/containers/Containerfile \
+              -t "${IMG}" .
+          elif command -v docker >/dev/null 2>&1; then
+            docker build \
+              --build-arg BUILD_VERSION="${VERSION_TAG}" \
+              -f deployments/containers/Containerfile \
+              -t "${IMG}" .
           else
-            podman build -f deployments/containers/Containerfile --build-arg "BUILD_VERSION=${VERSION_TAG}" -t "${IMG}" .
+            echo "ERROR: neither buildah nor docker on runner PATH"
+            exit 1
           fi
-          # Prefer docker login when available (same as mock-me); else podman.
-          if command -v docker >/dev/null 2>&1; then
-            echo "${GHCR_TOKEN}" | docker login ghcr.io -u dasmlab --password-stdin
-            if docker image inspect "${IMG}" >/dev/null 2>&1; then
-              docker push "${IMG}"
-            elif command -v buildah >/dev/null 2>&1; then
-              buildah push "${IMG}"
-            else
-              podman push "${IMG}"
-            fi
+
+      - name: Push image
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          IMG="ghcr.io/dasmlab/dasm-burner:${VERSION_TAG}"
+          echo "${GHCR_TOKEN}" | docker login ghcr.io -u dasmlab --password-stdin
+          if command -v buildah >/dev/null 2>&1 && ! docker image inspect "${IMG}" >/dev/null 2>&1; then
+            buildah push "${IMG}"
           else
-            echo "${GHCR_TOKEN}" | podman login ghcr.io -u dasmlab --password-stdin
-            podman push "${IMG}"
+            docker push "${IMG}"
           fi
 
       - name: Smoke
@@ -127,13 +136,11 @@ jobs:
           set -euo pipefail
           IMG="ghcr.io/dasmlab/dasm-burner:${VERSION_TAG}"
           cid="dasm-burner-smoke-${GITHUB_SHA::8}"
-          ENGINE=podman
-          command -v docker >/dev/null 2>&1 && ENGINE=docker
-          ${ENGINE} rm -f "${cid}" 2>/dev/null || true
-          # Ensure local engine has the tag (buildah vs docker/podman stores).
-          ${ENGINE} pull "${IMG}" || true
-          ${ENGINE} run -d --name "${cid}" -p 18080:8080 "${IMG}"
-          trap '${ENGINE} rm -f "${cid}" 2>/dev/null || true' EXIT
+          docker rm -f "${cid}" 2>/dev/null || true
+          # Ensure docker has the tag we just pushed (buildah vs docker stores).
+          docker pull "${IMG}"
+          docker run -d --name "${cid}" -p 18080:8080 "${IMG}"
+          trap 'docker rm -f "${cid}" 2>/dev/null || true' EXIT
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1 || \
                curl -fsS http://127.0.0.1:18080/api/v1/version >/dev/null 2>&1; then
@@ -141,7 +148,7 @@ jobs:
             fi
             sleep 2
           done
-          ${ENGINE} logs "${cid}" || true
+          docker logs "${cid}" || true
           exit 1
 
       - name: Ensure HAProxy CERT for prod FQDN
