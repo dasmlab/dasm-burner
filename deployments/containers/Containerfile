@@ -6,7 +6,7 @@ RUN npm install
 COPY web/ ./
 RUN npm run build
 
-# Stage 2: Go
+# Stage 2: Go + kube-burner binary
 FROM docker.io/library/golang:1.24-bookworm AS go-builder
 WORKDIR /app
 ARG BUILD_VERSION=dev
@@ -20,11 +20,21 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -ldflags "-s -w -X main.version=${BUILD_VERSION}" \
     -o /dasm-burner ./cmd/dasm-burner
 
+# Pinned kube-burner (measure / index / check-alerts)
+ARG KUBE_BURNER_VERSION=v2.8.1
+RUN curl -fsSL -o /tmp/kube-burner.tgz \
+      "https://github.com/kube-burner/kube-burner/releases/download/${KUBE_BURNER_VERSION}/kube-burner-V2.8.1-linux-x86_64.tar.gz" \
+    && tar -xzf /tmp/kube-burner.tgz -C /usr/local/bin kube-burner \
+    && chmod 0755 /usr/local/bin/kube-burner \
+    && /usr/local/bin/kube-burner version
+
 # Stage 3: runtime
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 COPY --from=go-builder /dasm-burner /usr/local/bin/dasm-burner
+COPY --from=go-builder /usr/local/bin/kube-burner /usr/local/bin/kube-burner
 USER 65532
 ENV LISTEN_ADDR=:8080
+ENV KUBE_BURNER=/usr/local/bin/kube-burner
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/dasm-burner"]
 CMD ["serve", "--addr", ":8080", "--run-dir", "/tmp"]
