@@ -28,6 +28,9 @@ type Live struct {
 // Clientset exposes the typed client for diagnosers and other internals.
 func (l *Live) Clientset() kubernetes.Interface { return l.cs }
 
+// Dynamic exposes the dynamic client (Routes, metrics.k8s.io, CRDs).
+func (l *Live) Dynamic() dynamic.Interface { return l.dyn }
+
 func (l *Live) CreateNamespace(ctx context.Context, ns *corev1.Namespace) error {
 	_, err := l.cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	return err

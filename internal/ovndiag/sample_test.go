@@ -34,6 +34,21 @@ func TestCorrelateBatch(t *testing.T) {
 	}
 }
 
+func TestParseCPUAndMem(t *testing.T) {
+	if got := parseCPUCores("250m"); got < 0.24 || got > 0.26 {
+		t.Fatalf("250m -> %v", got)
+	}
+	if got := parseCPUCores("1000000000n"); got < 0.9 || got > 1.1 {
+		t.Fatalf("1e9n -> %v", got)
+	}
+	if got := parseMemoryMiB("512Mi"); got < 511 || got > 513 {
+		t.Fatalf("512Mi -> %v", got)
+	}
+	if got := parseMemoryMiB("1073741824"); got < 1023 || got > 1025 {
+		t.Fatalf("1Gi bytes -> %v", got)
+	}
+}
+
 func TestClassifyLog(t *testing.T) {
 	if got := classifyLog("error: connection refused to northd"); got != "CONNECTION" && got != "ERROR" {
 		t.Fatalf("got %q", got)

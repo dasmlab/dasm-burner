@@ -83,13 +83,14 @@ type NodeLayer struct {
 }
 
 type OVNKubeLayer struct {
-	PodName       string `json:"podName,omitempty"`
-	Phase         string `json:"phase,omitempty"`
-	Ready         bool   `json:"ready"`
-	Restarts      int    `json:"restarts"`
-	RestartsDelta int    `json:"restartsDelta"`
-	OOMKilled     bool   `json:"oomKilled"`
-	CrashLoop     bool   `json:"crashLoop"`
+	PodName       string           `json:"podName,omitempty"`
+	Phase         string           `json:"phase,omitempty"`
+	Ready         bool             `json:"ready"`
+	Restarts      int              `json:"restarts"`
+	RestartsDelta int              `json:"restartsDelta"`
+	OOMKilled     bool             `json:"oomKilled"`
+	CrashLoop     bool             `json:"crashLoop"`
+	Resources     []ResourceSample `json:"resources,omitempty"`
 }
 
 type NetworkLayer struct {
@@ -100,12 +101,13 @@ type NetworkLayer struct {
 }
 
 type OVNNodeHealth struct {
-	NodeName     string       `json:"nodeName"`
-	OverallState HealthState  `json:"overallState"`
-	Node         NodeLayer    `json:"node"`
-	OVNKube      OVNKubeLayer `json:"ovnKube"`
-	Network      NetworkLayer `json:"network"`
-	Findings     []Finding    `json:"findings,omitempty"`
+	NodeName     string        `json:"nodeName"`
+	OverallState HealthState   `json:"overallState"`
+	Node         NodeLayer     `json:"node"`
+	OVNKube      OVNKubeLayer  `json:"ovnKube"`
+	Network      NetworkLayer  `json:"network"`
+	Database     DatabaseLayer `json:"database"`
+	Findings     []Finding     `json:"findings,omitempty"`
 }
 
 // Snapshot is an immutable diagnoser view for a moment (or end-of-run freeze).

@@ -8,16 +8,18 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
 const ovnNS = "openshift-ovn-kubernetes"
 
-// SampleOpts controls expensive collectors (logs).
+// SampleOpts controls expensive collectors (logs) and optional metrics.
 type SampleOpts struct {
 	ScanLogs    bool
 	MaxLogPods  int
 	EventWindow time.Duration
+	Dyn         dynamic.Interface // metrics.k8s.io when available
 }
 
 // Sample builds a live Snapshot (L1/L2/L5 + events/logs + correlation) against baseline.
@@ -26,6 +28,16 @@ func Sample(ctx context.Context, cs kubernetes.Interface, baseline *Baseline, ru
 		ScanLogs:    true,
 		MaxLogPods:  6,
 		EventWindow: 15 * time.Minute,
+	})
+}
+
+// SampleLive is SampleWith plus optional dynamic client for metrics.k8s.io.
+func SampleLive(ctx context.Context, cs kubernetes.Interface, dyn dynamic.Interface, baseline *Baseline, runID, cluster string, batchID int) (*Snapshot, error) {
+	return SampleWith(ctx, cs, baseline, runID, cluster, batchID, SampleOpts{
+		ScanLogs:    true,
+		MaxLogPods:  6,
+		EventWindow: 15 * time.Minute,
+		Dyn:         dyn,
 	})
 }
 
@@ -61,6 +73,15 @@ func SampleWith(ctx context.Context, cs kubernetes.Interface, baseline *Baseline
 	}
 	byNode := mapOVNPodsByNode(ovnPods.Items)
 
+	metricsOK := false
+	if opts.Dyn != nil {
+		metricsOK = MetricsAPIAvailable(ctx, opts.Dyn)
+		if metricsOK {
+			caps.Capabilities["l3_pod_metrics"] = true
+		}
+	}
+	caps.Capabilities["l4_ovn_db_containers"] = true
+
 	var findings []Finding
 	now := time.Now()
 	hot := map[string]bool{}
@@ -70,9 +91,17 @@ func SampleWith(ctx context.Context, cs kubernetes.Interface, baseline *Baseline
 		nh.Network = readNetworkLayer(n)
 		if p, ok := byNode[n.Name]; ok {
 			nh.OVNKube = readOVNKubeLayer(p, baseline)
+			nh.Database = readDatabaseLayer(p)
+			if metricsOK && opts.Dyn != nil {
+				if samples, err := CollectPodResources(ctx, opts.Dyn, p.Name); err == nil {
+					nh.OVNKube.Resources = samples
+				}
+			}
 		}
 		nf := evaluateNode(nh, now, batchID, baseline)
 		nf = append(nf, evaluateNetwork(nh, now, batchID)...)
+		nf = append(nf, evaluateDatabase(nh, now, batchID)...)
+		nf = append(nf, evaluateResources(n.Name, nh.OVNKube.Resources, baseline, now, batchID)...)
 		nh.Findings = nf
 		nh.OverallState = worstState(StateHealthy, severitiesToState(nf)...)
 		if nh.OverallState != StateHealthy {
@@ -89,6 +118,8 @@ func SampleWith(ctx context.Context, cs kubernetes.Interface, baseline *Baseline
 			snap.CriticalCount++
 		}
 	}
+
+	findings = append(findings, controlPlaneFindings(ovnPods.Items, now, batchID)...)
 
 	window := opts.EventWindow
 	if window <= 0 {

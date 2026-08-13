@@ -19,6 +19,7 @@ const router = createRouter({
         { path: 'execute', name: 'execute', component: () => import('src/pages/ExecutePage.vue'), meta: { admin: true } },
         { path: 'report', name: 'report', component: () => import('src/pages/ReportPage.vue'), meta: { admin: true } },
         { path: 'cleanup-reports', name: 'cleanup-reports', component: () => import('src/pages/CleanupReportsPage.vue'), meta: { admin: true } },
+        { path: 'ovn-diagnoser', name: 'ovn-diagnoser', component: () => import('src/pages/OVNDiagnoserPage.vue'), meta: { admin: true } },
       ],
     },
   ],

@@ -15,6 +15,13 @@ const (
 	RuleOVNKubeOOM       = "OVN104"
 	RuleEventBurst       = "OVN105"
 
+	RuleResourceCPU    = "OVN301"
+	RuleResourceMem    = "OVN302"
+	RuleOVSProcessFail = "OVN303"
+
+	RuleOVNDBNotReady = "OVN201"
+	RuleOVNDBLatency  = "OVN202"
+
 	RuleNetworkConfigDrift = "OVN401"
 	RuleMissingAnnot       = "OVN402"
 	RuleMissingSubnet      = "OVN403"

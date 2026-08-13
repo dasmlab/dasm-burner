@@ -89,6 +89,7 @@
     <p class="text-caption text-grey-7 q-mb-md">
       Active interrogation of node + ovnkube-node health (not kube-burner metrics).
       Baseline first, then sample during / after Execute to see restart Δ and findings.
+      <router-link :to="{ name: 'ovn-diagnoser' }">Open full OVN Diagnoser →</router-link>
     </p>
     <div v-if="ovnError" class="dasm-panel q-mb-md text-negative">{{ ovnError }}</div>
     <div v-if="ovnSnap" class="dasm-panel q-mb-lg">

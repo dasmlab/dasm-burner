@@ -98,5 +98,5 @@ func (s *Server) runOVNSample(r *http.Request, batchID int) (*ovndiag.Snapshot, 
 		runID = m.cur.RunID
 	}
 	m.mu.Unlock()
-	return ovndiag.Sample(r.Context(), live.Clientset(), s.ovnBaseline(), runID, s.currentCluster().Name, batchID)
+	return ovndiag.SampleLive(r.Context(), live.Clientset(), live.Dynamic(), s.ovnBaseline(), runID, s.currentCluster().Name, batchID)
 }

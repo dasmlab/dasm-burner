@@ -416,7 +416,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 				h.NodesReady, h.NodesReady+h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts))
 		}
 		if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil {
-			if snap, err := ovndiag.Sample(ctx, live.Clientset(), nil, g.RunID, run.Cluster, 0); err == nil {
+			if snap, err := ovndiag.SampleLive(ctx, live.Clientset(), live.Dynamic(), nil, g.RunID, run.Cluster, 0); err == nil {
 				s.ovnBaseline().Capture(snap.Nodes)
 				snap.BaselineAt = s.ovnBaseline().At()
 				if id, werr := ovndiag.WriteSnapshot(s.RunDir, snap); werr == nil {
@@ -424,6 +424,15 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 				}
 			} else {
 				run.appendLog("warn", "OVNDIAG", 0, "baseline sample: "+err.Error())
+			}
+			if !dryRun {
+				watch := &ovndiag.Watch{
+					CS: live.Clientset(), Dyn: live.Dynamic(), Baseline: s.ovnBaseline(),
+					RunDir: s.RunDir, RunID: g.RunID, Cluster: run.Cluster, Interval: 45 * time.Second,
+				}
+				watch.Start(ctx)
+				defer watch.Stop()
+				run.appendLog("info", "OVNDIAG", 0, "continuous watch started (45s)")
 			}
 		}
 	}
@@ -513,6 +522,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 							ScanLogs:    scanLogs,
 							MaxLogPods:  6,
 							EventWindow: 15 * time.Minute,
+							Dyn:         live.Dynamic(),
 						})
 						if err != nil {
 							run.appendLog("warn", "OVNDIAG", bid, err.Error())
