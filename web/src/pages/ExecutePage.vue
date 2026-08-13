@@ -12,6 +12,7 @@
     </div>
 
     <div v-if="error" class="dasm-panel q-mb-md text-negative">{{ error }}</div>
+    <div v-if="cleanupMsg" class="dasm-panel q-mb-md text-positive">{{ cleanupMsg }}</div>
 
     <div class="row q-col-gutter-md q-mb-md">
       <div class="col-12 col-md-5">
@@ -33,6 +34,18 @@
             {{ selectedMeta.servicesPerNamespace }} services ·
             {{ selectedMeta.replicasPerService }} pods/svc
             <span v-if="selectedMeta.counts"> · {{ selectedMeta.counts.pods }} pods total</span>
+          </div>
+          <div class="row items-center q-gutter-sm q-mt-md">
+            <q-chip
+              dense
+              square
+              :color="deployChipColor"
+              text-color="white"
+              :icon="deployOnline ? 'cloud_done' : 'cloud_off'"
+            >
+              {{ deployLabel }}
+            </q-chip>
+            <span v-if="deployPrefix" class="text-caption text-mono">{{ deployPrefix }}</span>
           </div>
         </div>
       </div>
@@ -70,6 +83,76 @@
       </div>
     </div>
 
+    <div v-if="runPrefix" class="dasm-panel q-mb-md run-meta">
+      <div class="row items-center q-col-gutter-md">
+        <div class="col-12 col-md-auto">
+          <div class="dasm-stat-label">Generated prefix</div>
+          <div class="text-mono text-weight-bold">{{ runPrefix }}</div>
+        </div>
+        <div class="col-12 col-md">
+          <div class="dasm-stat-label">Name pattern</div>
+          <div class="text-mono text-caption">{{ runPattern || `${runPrefix}-{kind}-{seq}-{sfx}` }}</div>
+          <div class="text-caption text-grey-7 q-mt-xs">
+            Ties burner (<code>kb</code>) → run (<code>{{ run?.runId }}</code>) → object kind → batch seq → unique suffix.
+          </div>
+        </div>
+        <div v-if="showReportLink" class="col-12 col-md-auto">
+          <q-btn
+            color="secondary"
+            unelevated
+            icon="assessment"
+            label="Open report"
+            :to="{ name: 'report' }"
+          />
+        </div>
+      </div>
+    </div>
+
+    <div class="dasm-panel q-mb-md">
+      <div class="row items-center justify-between q-mb-sm">
+        <div class="dasm-stat-label">Cleanup</div>
+        <div class="text-caption text-grey-7">
+          Managed label <code>dasm-burner.dasmlab.org/managed=true</code>
+          <span v-if="managedTotal != null"> · {{ managedTotal }} NS live</span>
+        </div>
+      </div>
+      <div class="row q-col-gutter-sm">
+        <div class="col-12 col-sm-auto">
+          <q-btn
+            outline
+            color="warning"
+            icon="delete_sweep"
+            label="Clean last run"
+            :loading="cleaning"
+            :disable="running || !templateName"
+            @click="doCleanup('last')"
+          />
+        </div>
+        <div class="col-12 col-sm-auto">
+          <q-btn
+            outline
+            color="warning"
+            icon="folder_delete"
+            label="Clean this template"
+            :loading="cleaning"
+            :disable="running || !templateName"
+            @click="doCleanup('template')"
+          />
+        </div>
+        <div class="col-12 col-sm-auto">
+          <q-btn
+            outline
+            color="negative"
+            icon="cleaning_services"
+            label="Clean all kb- runs"
+            :loading="cleaning"
+            :disable="running"
+            @click="doCleanup('all')"
+          />
+        </div>
+      </div>
+    </div>
+
     <div class="row q-col-gutter-md">
       <div class="col-12 col-lg-5">
         <div class="dasm-panel">
@@ -95,7 +178,18 @@
         <div class="dasm-panel log-panel">
           <div class="row items-center justify-between q-mb-sm">
             <div class="dasm-stat-label">Live log</div>
-            <q-chip dense square :color="statusColor" text-color="white">{{ runStatus }}</q-chip>
+            <div class="row items-center q-gutter-sm">
+              <q-btn
+                flat
+                dense
+                size="sm"
+                icon="restart_alt"
+                label="Clear / reset"
+                :disable="running"
+                @click="clearLog"
+              />
+              <q-chip dense square :color="statusColor" text-color="white">{{ runStatus }}</q-chip>
+            </div>
           </div>
           <div ref="logEl" class="log-canvas">
             <div v-for="(line, i) in logs" :key="i" class="log-line" :class="`lv-${line.level}`">
@@ -112,17 +206,21 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   cancelRun,
+  clearRunLog,
+  getCleanupStatus,
   getCluster,
   getRun,
   listTemplates,
+  postCleanup,
   selectTemplate,
   startRun,
 } from 'src/services/api'
 
 const error = ref('')
+const cleanupMsg = ref('')
 const templates = ref([])
 const templateName = ref('')
 const dryRun = ref(true)
@@ -130,9 +228,12 @@ const confirm = ref(false)
 const allowLarge = ref(false)
 const skipBaseline = ref(true)
 const starting = ref(false)
+const cleaning = ref(false)
 const run = ref(null)
 const clusterLabel = ref('…')
 const logEl = ref(null)
+const deploy = ref(null)
+const managedTotal = ref(null)
 let timer = null
 
 const templateOptions = computed(() =>
@@ -146,6 +247,27 @@ const steps = computed(() => run.value?.steps || [])
 const logs = computed(() => run.value?.logs || [])
 const runStatus = computed(() => run.value?.status || 'idle')
 const running = computed(() => runStatus.value === 'running')
+const runPrefix = computed(() => run.value?.prefix || '')
+const runPattern = computed(() => run.value?.namePattern || '')
+const showReportLink = computed(() =>
+  Boolean(run.value?.reportUrl) && runStatus.value === 'passed' && !run.value?.dryRun,
+)
+const deployOnline = computed(() => Boolean(deploy.value?.deployed))
+const deployPrefix = computed(() => deploy.value?.prefix || '')
+const deployLabel = computed(() => {
+  if (!deploy.value) return 'deploy status…'
+  if (deploy.value.deployed) {
+    const n = deploy.value.count || 0
+    return `online / still deployed (${n} NS)`
+  }
+  if (deploy.value.label === 'unknown') return 'no recorded real run'
+  return 'cleaned'
+})
+const deployChipColor = computed(() => {
+  if (deployOnline.value) return 'warning'
+  if (deploy.value?.label === 'cleaned') return 'positive'
+  return 'grey-6'
+})
 const statusColor = computed(() => {
   switch (runStatus.value) {
     case 'running': return 'warning'
@@ -170,10 +292,25 @@ async function refreshTemplates() {
   templateName.value = data.active || templates.value[0]?.name || ''
 }
 
+async function refreshDeploy() {
+  if (!templateName.value) {
+    deploy.value = null
+    return
+  }
+  try {
+    const data = await getCleanupStatus(templateName.value)
+    deploy.value = data.template || null
+    managedTotal.value = data.managedTotal ?? null
+  } catch {
+    /* cluster may be unreachable */
+  }
+}
+
 async function onTemplate(name) {
   if (!name) return
   await selectTemplate(name)
   await refreshTemplates()
+  await refreshDeploy()
 }
 
 async function poll() {
@@ -182,6 +319,7 @@ async function poll() {
     run.value = data.run
     await nextTick()
     if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
+    if (!running.value) await refreshDeploy()
   } catch {
     /* ignore poll errors */
   }
@@ -189,6 +327,7 @@ async function poll() {
 
 async function start() {
   error.value = ''
+  cleanupMsg.value = ''
   starting.value = true
   try {
     await selectTemplate(templateName.value)
@@ -216,12 +355,55 @@ async function cancel() {
   }
 }
 
+async function clearLog() {
+  error.value = ''
+  try {
+    const data = await clearRunLog()
+    if (data.run) run.value = data.run
+    else if (run.value) run.value = { ...run.value, logs: [] }
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+  }
+}
+
+async function doCleanup(scope) {
+  error.value = ''
+  cleanupMsg.value = ''
+  const labels = {
+    last: 'Clean last run for this template?',
+    template: 'Clean ALL recorded runs for this template?',
+    all: 'Clean ALL managed kb-* namespaces from every session/template?',
+  }
+  if (!window.confirm(labels[scope] || 'Clean?')) return
+  cleaning.value = true
+  try {
+    const data = await postCleanup({
+      scope,
+      template: templateName.value,
+      wait: true,
+      dryRun: false,
+    })
+    const deleted = (data.results || []).reduce((n, r) => n + (r.namespaces?.length || 0), 0)
+    cleanupMsg.value = `Cleanup ${scope}: deleted ${deleted} namespace(s).`
+    await refreshDeploy()
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+  } finally {
+    cleaning.value = false
+  }
+}
+
+watch(templateName, () => {
+  refreshDeploy()
+})
+
 onMounted(async () => {
   try {
     await refreshTemplates()
     const c = await getCluster()
     clusterLabel.value = c.current?.name || 'unknown'
     await poll()
+    await refreshDeploy()
   } catch (e) {
     error.value = e.response?.data?.error || e.message
   }
@@ -265,6 +447,7 @@ onUnmounted(() => {
 .pipe-msg {
   font-size: 0.78rem;
   color: #607483;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .is-pending { opacity: 0.55; }
 .is-running {
@@ -290,6 +473,11 @@ onUnmounted(() => {
   background: #eef2f5;
 }
 .is-skipped .pipe-dot { background: #90a0ad; }
+
+.run-meta .text-mono,
+.text-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 
 .log-panel { min-height: 420px; }
 .log-canvas {

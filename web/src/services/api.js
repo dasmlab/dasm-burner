@@ -29,6 +29,10 @@ export const addClusterLogin = (body) => api.post('/cluster/login', body).then((
 export const getRun = () => api.get('/runs/current').then((r) => r.data)
 export const startRun = (body) => api.post('/runs', body).then((r) => r.data)
 export const cancelRun = () => api.post('/runs/cancel').then((r) => r.data)
+export const clearRunLog = () => api.post('/runs/clear').then((r) => r.data)
+export const getCleanupStatus = (template) =>
+  api.get('/cleanup', { params: template ? { template } : {} }).then((r) => r.data)
+export const postCleanup = (body) => api.post('/cleanup', body, { timeout: 600_000 }).then((r) => r.data)
 
 export async function getAuthConfig() {
   const { data } = await api.get('/auth/config')

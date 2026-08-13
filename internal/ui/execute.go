@@ -32,6 +32,9 @@ type runStep struct {
 	Label    string     `json:"label"`
 	Kind     string     `json:"kind"` // phase | batch
 	Batch    int        `json:"batch,omitempty"`
+	SeqFrom  int        `json:"seqFrom,omitempty"`
+	SeqTo    int        `json:"seqTo,omitempty"`
+	Range    string     `json:"range,omitempty"` // e.g. 00001 or 00001--000050
 	Status   stepStatus `json:"status"`
 	Message  string     `json:"message,omitempty"`
 	Started  *time.Time `json:"started,omitempty"`
@@ -53,6 +56,8 @@ type execRun struct {
 	DryRun      bool               `json:"dryRun"`
 	Status      string             `json:"status"` // idle|running|passed|failed|aborted
 	RunID       string             `json:"runId,omitempty"`
+	Prefix      string             `json:"prefix,omitempty"`      // kb-{runId}
+	NamePattern string             `json:"namePattern,omitempty"` // kb-{runId}-{kind}-{seq}-{sfx}
 	Seed        int64              `json:"seed,omitempty"`
 	Steps       []runStep          `json:"steps"`
 	Logs        []logLine          `json:"logs"`
@@ -60,6 +65,7 @@ type execRun struct {
 	Finished    *time.Time         `json:"finished,omitempty"`
 	Error       string             `json:"error,omitempty"`
 	Convergence any                `json:"convergence,omitempty"`
+	ReportURL   string             `json:"reportUrl,omitempty"`
 	Warning     string             `json:"warning"`
 	mu          sync.Mutex         `json:"-"`
 	cancel      context.CancelFunc `json:"-"`
@@ -123,6 +129,30 @@ func (s *Server) runAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "canceling"})
 		return
 	}
+	if action == "clear" && r.Method == http.MethodPost {
+		m := s.execMgr()
+		m.mu.Lock()
+		cur := m.cur
+		m.mu.Unlock()
+		if cur == nil {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "idle"})
+			return
+		}
+		if cur.Status == "running" {
+			writeError(w, http.StatusConflict, fmt.Errorf("cannot clear canvas while a run is in progress"))
+			return
+		}
+		cur.mu.Lock()
+		cur.Logs = nil
+		cur.mu.Unlock()
+		cur.appendLog("info", "CLEAR", 0, "live log canvas cleared")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"run":     cur.snapshot(),
+			"status":  "cleared",
+			"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+		})
+		return
+	}
 	http.NotFound(w, r)
 }
 
@@ -170,21 +200,26 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	now := time.Now()
+	pfx := prefixForRun(g.RunID)
 	run := &execRun{
-		ID:       fmt.Sprintf("%s-%d", g.RunID, now.Unix()),
-		Template: body.Template,
-		Cluster:  s.currentCluster().Name,
-		DryRun:   body.DryRun,
-		Status:   "running",
-		RunID:    g.RunID,
-		Seed:     g.Seed,
-		Started:  &now,
-		Warning:  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
-		cancel:   cancel,
-		Steps:    planSteps(cfg, g),
+		ID:          fmt.Sprintf("%s-%d", g.RunID, now.Unix()),
+		Template:    body.Template,
+		Cluster:     s.currentCluster().Name,
+		DryRun:      body.DryRun,
+		Status:      "running",
+		RunID:       g.RunID,
+		Prefix:      pfx,
+		NamePattern: fmt.Sprintf("%s-{kind}-{seq:05d}-{sfx}", pfx),
+		Seed:        g.Seed,
+		Started:     &now,
+		Warning:     "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+		cancel:      cancel,
+		Steps:       planSteps(cfg, g),
 	}
 	m.cur = run
 	m.mu.Unlock()
+
+	run.appendLog("info", "PREFIX", 0, fmt.Sprintf("common prefix %s · pattern %s-ns-00001-xxxx", pfx, pfx))
 
 	go s.executeRun(ctx, run, cfg, g, body.DryRun, body.SkipBase)
 	writeJSON(w, http.StatusAccepted, map[string]any{
@@ -194,18 +229,25 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func planSteps(cfg *config.Config, g *topology.Graph) []runStep {
+	pfx := prefixForRun(g.RunID)
 	steps := []runStep{
-		{ID: "precheck", Label: "Precheck", Kind: "phase", Status: stepPending},
+		{ID: "precheck", Label: "Precheck", Kind: "phase", Status: stepPending, Message: pfx},
 		{ID: "baseline", Label: "Baseline", Kind: "phase", Status: stepPending},
 	}
-	batches := SplitBatchCount(cfg, len(g.Namespaces))
-	for i := 1; i <= batches; i++ {
+	for i, batch := range plannedBatches(cfg, g.Namespaces) {
+		id := i + 1
+		from, to := batch[0].Index, batch[len(batch)-1].Index
+		rng := formatSeqRange(from, to)
 		steps = append(steps, runStep{
-			ID:     fmt.Sprintf("batch-%d", i),
-			Label:  fmt.Sprintf("Batch %d", i),
-			Kind:   "batch",
-			Batch:  i,
-			Status: stepPending,
+			ID:      fmt.Sprintf("batch-%d", id),
+			Label:   fmt.Sprintf("Batch %d · ns %s", id, rng),
+			Kind:    "batch",
+			Batch:   id,
+			SeqFrom: from,
+			SeqTo:   to,
+			Range:   rng,
+			Status:  stepPending,
+			Message: fmt.Sprintf("%s-ns-%s-*", pfx, rng),
 		})
 	}
 	steps = append(steps,
@@ -215,6 +257,29 @@ func planSteps(cfg *config.Config, g *topology.Graph) []runStep {
 		runStep{ID: "done", Label: "Done", Kind: "phase", Status: stepPending},
 	)
 	return steps
+}
+
+func formatSeqRange(from, to int) string {
+	if to <= from {
+		return fmt.Sprintf("%05d", from)
+	}
+	return fmt.Sprintf("%05d--%05d", from, to)
+}
+
+// plannedBatches mirrors runner batching (including rate = 1 NS per batch).
+func plannedBatches(cfg *config.Config, namespaces []topology.Namespace) [][]topology.Namespace {
+	if cfg.Deployment.Mode == config.DeployRate {
+		out := make([][]topology.Namespace, 0, len(namespaces))
+		for _, ns := range namespaces {
+			out = append(out, []topology.Namespace{ns})
+		}
+		return out
+	}
+	size := cfg.Deployment.BatchSize
+	if cfg.Deployment.Mode == config.DeploySequential {
+		size = 1
+	}
+	return runner.SplitBatches(namespaces, size)
 }
 
 func SplitBatchCount(cfg *config.Config, ns int) int {
@@ -240,14 +305,40 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 		fin := time.Now()
 		run.mu.Lock()
 		run.Finished = &fin
-		if run.Status == "running" {
+		status := run.Status
+		if status == "running" {
 			run.Status = "passed"
+			status = "passed"
+		}
+		pfx := run.Prefix
+		tmpl := run.Template
+		rid := run.RunID
+		seed := run.Seed
+		cluster := run.Cluster
+		var started time.Time
+		if run.Started != nil {
+			started = *run.Started
+		} else {
+			started = fin
 		}
 		run.mu.Unlock()
+		if !dryRun && rid != "" {
+			s.recordHistory(runHistoryEntry{
+				RunID:    rid,
+				Template: tmpl,
+				Prefix:   pfx,
+				Seed:     seed,
+				DryRun:   false,
+				Started:  started,
+				Finished: fin,
+				Status:   status,
+				Cluster:  cluster,
+			})
+		}
 	}()
 
-	run.setStep("precheck", stepRunning, "starting")
-	run.appendLog("info", "PRECHECK", 0, fmt.Sprintf("template=%s run=%s dryRun=%v cluster=%s", run.Template, g.RunID, dryRun, run.Cluster))
+	run.setStep("precheck", stepRunning, fmt.Sprintf("%s · starting", run.Prefix))
+	run.appendLog("info", "PRECHECK", 0, fmt.Sprintf("template=%s run=%s prefix=%s dryRun=%v cluster=%s", run.Template, g.RunID, run.Prefix, dryRun, run.Cluster))
 
 	cs := s.clusterState()
 	cs.mu.Lock()
@@ -271,7 +362,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			return
 		}
 	}
-	run.setStep("precheck", stepPassed, "ok")
+	run.setStep("precheck", stepPassed, fmt.Sprintf("%s · ok", run.Prefix))
 
 	opts := runner.Options{
 		Cluster:      cl,
@@ -280,6 +371,19 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 		DryRun:       dryRun,
 		SkipBaseline: skipBase,
 		Log: func(phase runner.Phase, batch int, msg string) {
+			if phase == runner.PhaseBatchStart {
+				run.mu.Lock()
+				for _, st := range run.Steps {
+					if st.Batch == batch && st.Range != "" {
+						msg = fmt.Sprintf("%s · %s-ns-%s-* · %s", st.Range, run.Prefix, st.Range, msg)
+						break
+					}
+				}
+				run.mu.Unlock()
+			}
+			if phase == runner.PhaseWaitForReady && msg == "skipped" {
+				msg = "ready wait skipped"
+			}
 			run.appendLog("info", string(phase), batch, msg)
 			run.mapPhase(phase, batch, msg)
 		},
@@ -299,8 +403,15 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 	run.mu.Lock()
 	run.Convergence = rep.Convergence
 	run.Status = "passed"
+	if !dryRun {
+		run.ReportURL = "/report"
+	}
 	run.mu.Unlock()
-	run.setStep("done", stepPassed, "complete")
+	doneMsg := "complete"
+	if !dryRun {
+		doneMsg = "complete · open Report"
+	}
+	run.setStep("done", stepPassed, doneMsg)
 	_ = writeApplyReport(s.RunDir, rep)
 }
 
@@ -394,12 +505,20 @@ func (r *execRun) mapPhase(phase runner.Phase, batch int, msg string) {
 	case runner.PhaseObjectCreation, runner.PhaseWaitForReady, runner.PhaseBatchMeasurement, runner.PhaseHealthCheck:
 		r.setStep(fmt.Sprintf("batch-%d", batch), stepRunning, msg)
 	case runner.PhaseFinalSettle:
-		// close last batch
+		// close open batches with a stable range/prefix summary (not the last "skipped" wait msg)
 		r.mu.Lock()
+		pfx := r.Prefix
 		for i := range r.Steps {
-			if r.Steps[i].Kind == "batch" && r.Steps[i].Status == stepRunning {
+			if r.Steps[i].Kind == "batch" && (r.Steps[i].Status == stepRunning || r.Steps[i].Status == stepPending) {
 				now := time.Now()
-				r.Steps[i].Status = stepPassed
+				if r.Steps[i].Status == stepPending {
+					r.Steps[i].Status = stepSkipped
+				} else {
+					r.Steps[i].Status = stepPassed
+					if r.Steps[i].Range != "" {
+						r.Steps[i].Message = fmt.Sprintf("%s · %s-ns-%s-*", r.Steps[i].Range, pfx, r.Steps[i].Range)
+					}
+				}
 				r.Steps[i].Finished = &now
 			}
 			if r.Steps[i].ID == "baseline" && r.Steps[i].Status == stepRunning {
@@ -416,8 +535,18 @@ func (r *execRun) mapPhase(phase runner.Phase, batch int, msg string) {
 	case runner.PhaseReport:
 		r.setStep("measure", stepPassed, "ok")
 		r.setStep("report", stepRunning, msg)
+		r.mu.Lock()
+		if !r.DryRun {
+			r.ReportURL = "/report"
+		}
+		r.mu.Unlock()
 	case runner.PhaseDone:
-		r.setStep("report", stepPassed, "ok")
+		r.setStep("report", stepPassed, func() string {
+			if r.DryRun {
+				return "ok (dry-run)"
+			}
+			return "ok · report ready"
+		}())
 		r.setStep("done", stepPassed, msg)
 	case runner.PhaseAborted:
 		r.fail("", msg)
