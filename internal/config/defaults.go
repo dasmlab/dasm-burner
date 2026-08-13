@@ -61,6 +61,7 @@ func Default() *Config {
 				Termination:                   "edge",
 				InsecureEdgeTerminationPolicy: "Redirect",
 			},
+			AvoidTaints: DefaultAvoidTaints(),
 		},
 		Naming: Naming{
 			Seed:       Seed{Auto: true},
@@ -164,6 +165,10 @@ func ApplyDefaults(c *Config) {
 	}
 	if c.Application.TLS.InsecureEdgeTerminationPolicy == "" {
 		c.Application.TLS.InsecureEdgeTerminationPolicy = d.Application.TLS.InsecureEdgeTerminationPolicy
+	}
+	// nil means "use product default"; explicit empty YAML list opts out.
+	if c.Application.AvoidTaints == nil {
+		c.Application.AvoidTaints = append([]AvoidTaint(nil), d.Application.AvoidTaints...)
 	}
 	if c.Naming.Namespace.Prefix == "" {
 		c.Naming.Namespace.Prefix = d.Naming.Namespace.Prefix

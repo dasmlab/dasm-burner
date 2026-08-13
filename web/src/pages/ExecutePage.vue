@@ -86,6 +86,22 @@
           <q-toggle v-model="confirm" label="I understand this loads the control plane" :disable="running || dryRun" />
           <q-toggle v-model="allowLarge" label="Allow >10 namespaces" :disable="running || dryRun" />
           <q-toggle v-model="skipBaseline" label="Skip baseline wait" :disable="running" />
+          <div class="dasm-stat-label q-mt-md q-mb-xs">Do not tolerate (taints)</div>
+          <q-select
+            v-model="avoidTaints"
+            :options="avoidTaintOptions"
+            dense
+            outlined
+            multiple
+            use-input
+            use-chips
+            new-value-mode="add-unique"
+            hide-dropdown-icon
+            input-debounce="0"
+            :disable="running"
+            hint="Pods will not tolerate these — keeps load off infra nodes"
+            @new-value="addAvoidTaint"
+          />
         </div>
       </div>
       <div class="col-12 col-md-3">
@@ -262,6 +278,11 @@ const dryRun = ref(true)
 const confirm = ref(false)
 const allowLarge = ref(false)
 const skipBaseline = ref(true)
+const avoidTaints = ref(['node-role.kubernetes.io=infra:NoSchedule'])
+const avoidTaintOptions = [
+  'node-role.kubernetes.io=infra:NoSchedule',
+  'node-role.kubernetes.io/infra:NoSchedule',
+]
 const starting = ref(false)
 const cleaning = ref(false)
 const checking = ref(false)
@@ -419,6 +440,12 @@ async function poll() {
   }
 }
 
+function addAvoidTaint(val, done) {
+  const v = String(val || '').trim()
+  if (!v) return
+  done(v, 'add-unique')
+}
+
 async function start() {
   error.value = ''
   cleanupMsg.value = ''
@@ -431,6 +458,7 @@ async function start() {
       confirm: confirm.value,
       allowLarge: allowLarge.value,
       skipBaseline: skipBaseline.value,
+      avoidTaints: [...avoidTaints.value],
     })
     run.value = data.run
   } catch (e) {

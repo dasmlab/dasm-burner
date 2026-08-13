@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -162,6 +163,7 @@ func initDeploymentTemplate(cfg *config.Config, runID string) string {
 	if cfg.Application.ImagePullSecret != "" {
 		pull = "\n      imagePullSecrets:\n      - name: " + cfg.Application.ImagePullSecret
 	}
+	sched := schedulingYAML(cfg.Application.AvoidTaints)
 	return fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -181,7 +183,7 @@ spec:
         dasm-burner.dasmlab.org/managed: "true"
         dasm-burner.dasmlab.org/run: "%[1]s"
         app: kb-%[1]s-pair-{{.Iteration}}-{{.Replica}}
-    spec:%[3]s
+    spec:%[3]s%[6]s
       containers:
       - name: web
         image: %[4]s
@@ -208,7 +210,31 @@ spec:
             drop: ["ALL"]
           seccompProfile:
             type: RuntimeDefault
-`, runID, cfg.Topology.Workloads.ReplicasPerService, pull, cfg.Application.Image, cfg.Application.Port)
+`, runID, cfg.Topology.Workloads.ReplicasPerService, pull, cfg.Application.Image, cfg.Application.Port, sched)
+}
+
+// schedulingYAML emits affinity (and empty tolerations comment) for kube-burner object templates.
+func schedulingYAML(avoid []config.AvoidTaint) string {
+	aff := topology.AvoidTaintAffinity(avoid)
+	if aff == nil || aff.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return "\n      # no avoidTaints — pods may schedule on any untolerated-taint-free node"
+	}
+	var b strings.Builder
+	b.WriteString("\n      # deliberately no tolerations for avoided taints (infra etc.)")
+	b.WriteString("\n      affinity:\n        nodeAffinity:\n          requiredDuringSchedulingIgnoredDuringExecution:\n            nodeSelectorTerms:\n")
+	for _, term := range aff.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		b.WriteString("            - matchExpressions:\n")
+		for _, e := range term.MatchExpressions {
+			b.WriteString(fmt.Sprintf("              - key: %s\n                operator: %s\n", e.Key, e.Operator))
+			if len(e.Values) > 0 {
+				b.WriteString("                values:\n")
+				for _, v := range e.Values {
+					b.WriteString(fmt.Sprintf("                - %q\n", v))
+				}
+			}
+		}
+	}
+	return b.String()
 }
 
 func initServiceTemplate(cfg *config.Config, runID string) string {

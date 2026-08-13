@@ -152,11 +152,12 @@ func (s *Server) runAction(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Template   string `json:"template"`
-		DryRun     bool   `json:"dryRun"`
-		Confirm    bool   `json:"confirm"`
-		AllowLarge bool   `json:"allowLarge"`
-		SkipBase   bool   `json:"skipBaseline"`
+		Template    string   `json:"template"`
+		DryRun      bool     `json:"dryRun"`
+		Confirm     bool     `json:"confirm"`
+		AllowLarge  bool     `json:"allowLarge"`
+		SkipBase    bool     `json:"skipBaseline"`
+		AvoidTaints []string `json:"avoidTaints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -173,6 +174,16 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("template %q: %w", body.Template, err))
 		return
+	}
+	// Execute-time override: list of kubectl-style taints pods must NOT tolerate.
+	// Omit / null → keep template/defaults. Explicit [] → clear (allow all).
+	if body.AvoidTaints != nil {
+		parsed, perr := config.ParseAvoidTaints(body.AvoidTaints)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("avoidTaints: %w", perr))
+			return
+		}
+		cfg.Application.AvoidTaints = parsed
 	}
 	s.setActiveTemplate(body.Template)
 	if err := runner.EnsureSafe(cfg, body.DryRun, body.Confirm, body.AllowLarge); err != nil {
@@ -233,11 +244,22 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	run.appendLog("info", "PREFIX", 0, fmt.Sprintf("common prefix %s · pattern %s-ns-00001-xxxx", pfx, pfx))
 	run.appendLog("info", "BATCH", 0, fmt.Sprintf("%s · size=%d waves=%d · %s",
 		batchPlan.Strategy, batchPlan.Size, batchPlan.Count, batchPlan.Reason))
+	if len(cfg.Application.AvoidTaints) == 0 {
+		run.appendLog("info", "SCHED", 0, "avoidTaints=none (pods may land on any node the scheduler allows)")
+	} else {
+		parts := make([]string, 0, len(cfg.Application.AvoidTaints))
+		for _, t := range cfg.Application.AvoidTaints {
+			parts = append(parts, t.String())
+		}
+		run.appendLog("info", "SCHED", 0, "will NOT tolerate taints: "+strings.Join(parts, ", ")+
+			" · nodeAffinity excludes matching infra/role labels")
+	}
 
 	go s.executeRun(ctx, run, cfg, g, body.DryRun, body.SkipBase)
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"run":     run.snapshot(),
-		"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+		"run":         run.snapshot(),
+		"avoidTaints": cfg.Application.AvoidTaints,
+		"warning":     "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
 

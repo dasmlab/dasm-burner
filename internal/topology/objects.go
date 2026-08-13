@@ -57,6 +57,60 @@ func pullPolicy(s string) corev1.PullPolicy {
 func BuildDeployment(g *Graph, ns Namespace, pair Pair, cfg *config.Config) *appsv1.Deployment {
 	labels := PairLabels(g.RunID, pair.App, naming.KindDeployment)
 	podLabels := PairLabels(g.RunID, pair.App, "pod")
+	podSpec := corev1.PodSpec{
+		ImagePullSecrets: imagePullSecrets(cfg),
+		Containers: []corev1.Container{{
+			Name:            "web",
+			Image:           cfg.Application.Image,
+			ImagePullPolicy: pullPolicy(cfg.Application.ImagePullPolicy),
+			Ports: []corev1.ContainerPort{{
+				Name:          "http",
+				ContainerPort: cfg.Application.Port,
+				Protocol:      corev1.ProtocolTCP,
+			}},
+			Env: []corev1.EnvVar{{
+				Name: "POD_NAME",
+				ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+				},
+			}},
+			ReadinessProbe: &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{
+						Path: "/readyz",
+						Port: intstr.FromString("http"),
+					},
+				},
+			},
+			LivenessProbe: &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{
+						Path: "/healthz",
+						Port: intstr.FromString("http"),
+					},
+				},
+			},
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("1m"),
+					corev1.ResourceMemory: resource.MustParse("8Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("50m"),
+					corev1.ResourceMemory: resource.MustParse("32Mi"),
+				},
+			},
+			SecurityContext: &corev1.SecurityContext{
+				AllowPrivilegeEscalation: boolptr(false),
+				RunAsNonRoot:             boolptr(true),
+				SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				Capabilities: &corev1.Capabilities{
+					Drop: []corev1.Capability{"ALL"},
+				},
+			},
+		}},
+	}
+	ApplyScheduling(&podSpec, cfg.Application.AvoidTaints)
 	return &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -71,59 +125,7 @@ func BuildDeployment(g *Graph, ns Namespace, pair Pair, cfg *config.Config) *app
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
-				Spec: corev1.PodSpec{
-					ImagePullSecrets: imagePullSecrets(cfg),
-					Containers: []corev1.Container{{
-						Name:            "web",
-						Image:           cfg.Application.Image,
-						ImagePullPolicy: pullPolicy(cfg.Application.ImagePullPolicy),
-						Ports: []corev1.ContainerPort{{
-							Name:          "http",
-							ContainerPort: cfg.Application.Port,
-							Protocol:      corev1.ProtocolTCP,
-						}},
-						Env: []corev1.EnvVar{{
-							Name: "POD_NAME",
-							ValueFrom: &corev1.EnvVarSource{
-								FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
-							},
-						}},
-						ReadinessProbe: &corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								HTTPGet: &corev1.HTTPGetAction{
-									Path: "/readyz",
-									Port: intstr.FromString("http"),
-								},
-							},
-						},
-						LivenessProbe: &corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								HTTPGet: &corev1.HTTPGetAction{
-									Path: "/healthz",
-									Port: intstr.FromString("http"),
-								},
-							},
-						},
-						Resources: corev1.ResourceRequirements{
-							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("1m"),
-								corev1.ResourceMemory: resource.MustParse("8Mi"),
-							},
-							Limits: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("50m"),
-								corev1.ResourceMemory: resource.MustParse("32Mi"),
-							},
-						},
-						SecurityContext: &corev1.SecurityContext{
-							AllowPrivilegeEscalation: boolptr(false),
-							RunAsNonRoot:             boolptr(true),
-							SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-							Capabilities: &corev1.Capabilities{
-								Drop: []corev1.Capability{"ALL"},
-							},
-						},
-					}},
-				},
+				Spec:       podSpec,
 			},
 		},
 	}

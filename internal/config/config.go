@@ -83,6 +83,9 @@ type Application struct {
 	Port                int32        `yaml:"port"`
 	Response            ResponseSpec `yaml:"response"`
 	TLS                 RouteTLSSpec `yaml:"tls"`
+	// AvoidTaints: workload pods must NOT tolerate these (Execute can override).
+	// nil → ApplyDefaults fills DefaultAvoidTaints; empty slice → none.
+	AvoidTaints []AvoidTaint `yaml:"avoidTaints,omitempty" json:"avoidTaints,omitempty"`
 }
 
 type ResponseSpec struct {
