@@ -1,20 +1,56 @@
 name: dasm-burner CX Pipeline
 
+# Dual-env (same as mock-me / interview-me / dasmlab-home):
+#   main          → clusters/.../dasm-burner/live/          (prod)
+#   any other ref → clusters/.../dasm-burner/previews/{owner}.yaml
+# There is NO live-cicd "development/" overlay path.
+#
+# Runs on org self-hosted runner (bld-249-runner). Token resolution mirrors mock-me:
+#   1) /home/dasm/gh_token on the runner (if present)
+#   2) repo/org secret DASMLAB_GHCR_PAT
+#   3) /home/dasm/gh-pat sourced env
+#   4) GITHUB_TOKEN (packages:write) last resort
+
 on:
   push:
-    branches: ["main", "development"]
+    branches: ["**"]
   workflow_dispatch:
+    inputs:
+      fresh_preview:
+        description: "Wipe preview data PVC before deploy (branch previews only)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dasm-burner-${{ github.ref == 'refs/heads/main' && 'prod' || format('preview-{0}', github.actor) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   prepare:
     runs-on: [self-hosted]
     outputs:
       version_tag: ${{ steps.meta.outputs.version_tag }}
+      is_prod: ${{ steps.meta.outputs.is_prod }}
+      fresh_preview: ${{ steps.meta.outputs.fresh_preview }}
     steps:
       - uses: actions/checkout@v4
       - id: meta
         run: |
+          set -euo pipefail
           echo "version_tag=v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "is_prod=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prod=false" >> "$GITHUB_OUTPUT"
+          fi
+          fresh=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.fresh_preview }}" = "true" ]; then
+            fresh=true
+          fi
+          if git log -1 --pretty=%B | grep -qi '\[fresh-preview\]'; then
+            fresh=true
+          fi
+          echo "fresh_preview=${fresh}" >> "$GITHUB_OUTPUT"
 
   build-publish:
     needs: prepare
@@ -26,21 +62,37 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Resolve GHCR token
+        env:
+          SECRET_PAT: ${{ secrets.DASMLAB_GHCR_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           token=""
           if [ -f "/home/dasm/gh_token" ]; then
             token="$(tr -d '\n\r' < /home/dasm/gh_token)"
+            echo "token source: /home/dasm/gh_token"
+          fi
+          if [ -z "${token}" ] && [ -n "${SECRET_PAT:-}" ]; then
+            token="${SECRET_PAT}"
+            echo "token source: secrets.DASMLAB_GHCR_PAT"
+          fi
+          if [ -z "${token}" ] && [ -f "/home/dasm/gh-pat" ]; then
+            # shellcheck disable=SC1091
+            source /home/dasm/gh-pat
+            token="${DASMLAB_GHCR_PAT:-${GH_TOKEN:-}}"
+            echo "token source: /home/dasm/gh-pat"
+          fi
+          if [ -z "${token}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+            token="${GITHUB_TOKEN}"
+            echo "token source: GITHUB_TOKEN"
           fi
           if [ -z "${token}" ]; then
-            token="${{ secrets.DASMLAB_GHCR_PAT }}"
-          fi
-          if [ -z "${token}" ]; then
-            echo "ERROR: GHCR token not set"
+            echo "ERROR: GHCR token not set (need runner /home/dasm/gh_token or secret DASMLAB_GHCR_PAT)"
             exit 1
           fi
           echo "::add-mask::${token}"
           echo "GHCR_TOKEN=${token}" >> "$GITHUB_ENV"
+          echo "Token length: ${#token}"
 
       - name: Build and push
         env:
@@ -53,29 +105,47 @@ jobs:
           else
             podman build -f deployments/containers/Containerfile --build-arg "BUILD_VERSION=${VERSION_TAG}" -t "${IMG}" .
           fi
-          echo "${GHCR_TOKEN}" | podman login ghcr.io -u dasmlab --password-stdin
-          podman push "${IMG}"
+          # Prefer docker login when available (same as mock-me); else podman.
+          if command -v docker >/dev/null 2>&1; then
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u dasmlab --password-stdin
+            if docker image inspect "${IMG}" >/dev/null 2>&1; then
+              docker push "${IMG}"
+            elif command -v buildah >/dev/null 2>&1; then
+              buildah push "${IMG}"
+            else
+              podman push "${IMG}"
+            fi
+          else
+            echo "${GHCR_TOKEN}" | podman login ghcr.io -u dasmlab --password-stdin
+            podman push "${IMG}"
+          fi
 
       - name: Smoke
         env:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
         run: |
           set -euo pipefail
+          IMG="ghcr.io/dasmlab/dasm-burner:${VERSION_TAG}"
           cid="dasm-burner-smoke-${GITHUB_SHA::8}"
-          podman rm -f "${cid}" 2>/dev/null || true
-          podman run -d --name "${cid}" -p 18080:8080 "ghcr.io/dasmlab/dasm-burner:${VERSION_TAG}"
-          trap 'podman rm -f "${cid}" 2>/dev/null || true' EXIT
+          ENGINE=podman
+          command -v docker >/dev/null 2>&1 && ENGINE=docker
+          ${ENGINE} rm -f "${cid}" 2>/dev/null || true
+          # Ensure local engine has the tag (buildah vs docker/podman stores).
+          ${ENGINE} pull "${IMG}" || true
+          ${ENGINE} run -d --name "${cid}" -p 18080:8080 "${IMG}"
+          trap '${ENGINE} rm -f "${cid}" 2>/dev/null || true' EXIT
           for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1 || \
+               curl -fsS http://127.0.0.1:18080/api/v1/version >/dev/null 2>&1; then
               exit 0
             fi
             sleep 2
           done
-          podman logs "${cid}" || true
+          ${ENGINE} logs "${cid}" || true
           exit 1
 
       - name: Ensure HAProxy CERT for prod FQDN
-        if: success()
+        if: success() && needs.prepare.outputs.is_prod == 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -84,29 +154,35 @@ jobs:
             echo "WARN: ssh not on runner — skip HAProxy CERT ensure"
             exit 0
           fi
-          if [ -f scripts/ci/ensure-prod-cert.sh ]; then
-            bash scripts/ci/ensure-prod-cert.sh "${FQDN}"
-          else
-            echo "WARN: ensure-prod-cert.sh missing — add CERTn on 10.20.1.10 manually"
-          fi
+          bash scripts/ci/ensure-prod-cert.sh "${FQDN}"
 
   gitops-deploy:
     needs: [prepare, build-publish]
-    if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development')
+    if: success() && needs.prepare.outputs.is_prod == 'true'
     runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
-      - name: GitOps sync
+      - name: GitOps sync (prod live/)
         env:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+          SECRET_PAT: ${{ secrets.DASMLAB_GHCR_PAT }}
         run: |
           set -euo pipefail
           DEPLOY_TOKEN=""
           if [ -f "/home/dasm/gh_token" ]; then
             DEPLOY_TOKEN="$(tr -d '\n\r' < /home/dasm/gh_token)"
           fi
+          if [ -z "${DEPLOY_TOKEN}" ] && [ -n "${SECRET_PAT:-}" ]; then
+            DEPLOY_TOKEN="${SECRET_PAT}"
+          fi
+          if [ -z "${DEPLOY_TOKEN}" ] && [ -f "/home/dasm/gh-pat" ]; then
+            # shellcheck disable=SC1091
+            source /home/dasm/gh-pat
+            DEPLOY_TOKEN="${DASMLAB_GHCR_PAT:-${GH_TOKEN:-}}"
+          fi
           if [ -z "${DEPLOY_TOKEN}" ]; then
-            DEPLOY_TOKEN="${{ secrets.DASMLAB_GHCR_PAT }}"
+            echo "ERROR: deploy token not set"
+            exit 1
           fi
           git clone "https://x-access-token:${DEPLOY_TOKEN}@github.com/lmcdasm/dasmlab-live-cicd.git"
           sed -e "s|__VERSION__|${VERSION_TAG}|g" \
@@ -117,6 +193,8 @@ jobs:
           mkdir -p dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications
           cp k8s_envelope/argocd-application.yaml \
             dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications/dasm-burner.yaml
+          cp k8s_envelope/argocd-application-previews.yaml \
+            dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications/dasm-burner-previews.yaml
           for old in "${DEPLOY_DIR}"/dasm-burner-v*.yaml; do
             [ -e "${old}" ] && mv "${old}" "${ARCHIVE_DIR}/"
           done
@@ -131,3 +209,28 @@ jobs:
           fi
           git commit -m "Auto-publish dasm-burner ${VERSION_TAG}"
           git push
+
+  preview-deploy:
+    needs: [prepare, build-publish]
+    if: success() && needs.prepare.outputs.is_prod != 'true'
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: GitOps preview (previews/{owner}.yaml)
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+          PREVIEW_ACTOR: ${{ github.actor }}
+          PREVIEW_FRESH: ${{ needs.prepare.outputs.fresh_preview }}
+          DASMLAB_GHCR_PAT: ${{ secrets.DASMLAB_GHCR_PAT }}
+          PREVIEW_PROXY_SSH_KEY: ${{ secrets.PREVIEW_PROXY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -f /home/dasm/gh_token ]; then
+            :
+          elif [ -z "${DASMLAB_GHCR_PAT}" ] && [ -f /home/dasm/gh-pat ]; then
+            # shellcheck disable=SC1091
+            source /home/dasm/gh-pat
+            export DASMLAB_GHCR_PAT
+          fi
+          chmod +x scripts/ci/*.sh
+          bash scripts/ci/deploy-preview.sh
