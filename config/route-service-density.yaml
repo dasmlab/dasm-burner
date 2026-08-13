@@ -1,0 +1,87 @@
+apiVersion: benchmark.dasmlab.org/v1
+kind: OpenShiftNetworkDensity
+
+metadata:
+  name: route-service-density
+  description: "2500-namespace OpenShift network/control-plane density topology"
+
+topology:
+  namespaces:
+    count: 2500
+  services:
+    perNamespace: 2
+  routes:
+    perNamespace: 2
+  workloads:
+    controller: Deployment
+    replicasPerService: 3
+  relationships:
+    routeToService: oneToOne
+
+application:
+  image: "ghcr.io/dasmlab/dasm-burner-web:dev"
+  port: 8080
+  response:
+    type: podName
+  tls:
+    enabled: true
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+naming:
+  seed: auto
+  namespace:
+    prefix: ns
+    randomLength: 4
+  service:
+    prefix: svc
+    randomLength: 4
+  route:
+    prefix: rt
+    randomLength: 4
+  deployment:
+    prefix: deploy
+    randomLength: 4
+
+# Phase 2+ — parsed and defaulted now, not executed by generate.
+deployment:
+  mode: batch
+  batchSize: 50
+  batchDelay: 5s
+  apiConcurrency: 20
+  waitForReady: true
+  readinessTimeout: 5m
+
+monitoring:
+  baseline:
+    duration: 60s
+  interval: 15s
+  prometheus:
+    enabled: true
+  ovnKubernetes:
+    enabled: true
+  events:
+    enabled: true
+  podLatency:
+    enabled: true
+  serviceLatency:
+    enabled: true
+
+safety:
+  enabled: true
+  abortOn:
+    nodeNotReady: true
+    oomKilled: true
+    criticalAlert: true
+  thresholds:
+    maxPodFailurePercent: 5
+    maxApiErrorPercent: 2
+    maxNodeNotReady: 0
+  gracePeriod: 30s
+
+execution:
+  steadyState:
+    enabled: true
+    duration: 10m
+  cleanup:
+    enabled: false

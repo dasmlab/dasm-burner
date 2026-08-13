@@ -1,0 +1,44 @@
+apiVersion: benchmark.dasmlab.org/v1
+kind: OpenShiftNetworkDensity
+
+metadata:
+  name: smoke
+  description: "2-namespace topology for generator tests — still do not apply blindly"
+
+topology:
+  namespaces:
+    count: 2
+  services:
+    perNamespace: 2
+  routes:
+    perNamespace: 2
+  workloads:
+    controller: Deployment
+    replicasPerService: 3
+  relationships:
+    routeToService: oneToOne
+
+application:
+  image: "ghcr.io/dasmlab/dasm-burner-web:dev"
+  port: 8080
+  response:
+    type: podName
+  tls:
+    enabled: true
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+naming:
+  seed: 1837291
+
+deployment:
+  mode: batch
+  batchSize: 1
+  batchDelay: 1s
+  apiConcurrency: 8
+  waitForReady: true
+  readinessTimeout: 2m
+
+monitoring:
+  baseline:
+    duration: 0s

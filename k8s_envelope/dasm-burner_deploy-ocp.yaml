@@ -1,0 +1,206 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dasm-burner-system
+  labels:
+    app: dasm-burner
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dasm-burner-sa
+  namespace: dasm-burner-system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openshift-gitops-argocd-application-controller
+  namespace: dasm-burner-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+  - kind: ServiceAccount
+    name: openshift-gitops-argocd-application-controller
+    namespace: openshift-gitops
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: admin
+  namespace: dasm-burner-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+  - kind: User
+    name: dasm
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dasm-burner-observe
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "namespaces", "services", "events", "secrets"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dasm-burner-observe
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dasm-burner-observe
+subjects:
+  - kind: ServiceAccount
+    name: dasm-burner-sa
+    namespace: dasm-burner-system
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dasm-burner
+  namespace: dasm-burner-system
+  labels:
+    app: dasm-burner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dasm-burner
+  template:
+    metadata:
+      labels:
+        app: dasm-burner
+    spec:
+      serviceAccountName: dasm-burner-sa
+      imagePullSecrets:
+        - name: dasmlab-ghcr-pull
+      containers:
+        - name: dasm-burner
+          image: ghcr.io/dasmlab/dasm-burner:__VERSION__
+          imagePullPolicy: Always
+          args: ["serve", "--addr", ":8080", "--run-dir", "/data"]
+          env:
+            - name: BUILD_VERSION
+              value: "__VERSION__"
+            - name: CLUSTER_DISPLAY_NAME
+              value: "2026-prod-1 (in-cluster)"
+            - name: KEYCLOAK_URL
+              value: "https://keycloak.apps.2026-prod-1.ocp.dasmlab.org"
+            - name: KEYCLOAK_REALM
+              value: "dasmlab"
+            - name: OIDC_CLIENT_ID
+              value: "dasm-burner"
+            - name: APP_PUBLIC_URL
+              value: "https://dasm-burner.apps.2026-prod-1.ocp.dasmlab.org"
+            - name: OIDC_REDIRECT_URI
+              value: "https://dasm-burner.apps.2026-prod-1.ocp.dasmlab.org/api/v1/auth/callback"
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dasm-burner-oidc
+                  key: client-secret
+            - name: OIDC_CA_FILE
+              value: /etc/oidc/ca.crt
+          volumeMounts:
+            - name: oidc-ca
+              mountPath: /etc/oidc
+              readOnly: true
+            - name: data
+              mountPath: /data
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+      volumes:
+        - name: oidc-ca
+          configMap:
+            name: dasm-burner-oidc-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: data
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dasm-burner
+  namespace: dasm-burner-system
+spec:
+  selector:
+    app: dasm-burner
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dasm-burner
+  namespace: dasm-burner-system
+  labels:
+    app: dasm-burner
+spec:
+  host: dasm-burner.apps.2026-prod-1.ocp.dasmlab.org
+  to:
+    kind: Service
+    name: dasm-burner
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

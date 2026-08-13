@@ -1,0 +1,123 @@
+:root {
+  --dasm-ink: #12202c;
+  --dasm-primary-light: #3f9f8e;
+  --dasm-primary-dark: #1f6f62;
+  --dasm-secondary-light: #74865c;
+  --dasm-accent-light: #9e73b2;
+  --dasm-dark-elevated: #1d2b36;
+  --dasm-surface-0: #f5f8fb;
+  --dasm-surface-1: #ffffff;
+  --dasm-surface-2: #eef3f8;
+  --dasm-border-soft: rgba(28, 52, 73, 0.14);
+  --dasm-border-strong: rgba(63, 122, 107, 0.35);
+  --dasm-text-soft: #445566;
+  --dasm-text-muted: #6f7f8d;
+  --dasm-glow-primary: rgba(63, 122, 107, 0.14);
+  --dasm-glow-accent: rgba(158, 115, 178, 0.1);
+}
+
+body,
+#q-app {
+  color: #233241;
+  font-family: 'Source Sans 3', 'Segoe UI', sans-serif;
+  background:
+    radial-gradient(circle at 10% 8%, rgba(63, 122, 107, 0.1), transparent 36%),
+    radial-gradient(circle at 92% 12%, rgba(158, 115, 178, 0.09), transparent 38%),
+    linear-gradient(180deg, #f7fafc, #eef4f9);
+}
+
+h1, h2, h3, .dasm-title {
+  font-family: 'Fraunces', Georgia, serif;
+}
+
+.dasm-shell {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--dasm-border-strong);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 8% 12%, var(--dasm-glow-primary), transparent 40%),
+    radial-gradient(circle at 92% 16%, var(--dasm-glow-accent), transparent 42%),
+    linear-gradient(155deg, #ffffff, #f6fafc);
+}
+
+.dasm-shell__content {
+  position: relative;
+  z-index: 2;
+  padding: 1.2rem 1.15rem;
+}
+
+.dasm-caps {
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  color: #607483;
+  font-weight: 600;
+}
+
+.dasm-title {
+  margin: 0.35rem 0 0.55rem;
+  font-size: clamp(1.35rem, 2.4vw, 2.1rem);
+  line-height: 1.09;
+  font-weight: 700;
+  color: #1d2b36;
+}
+
+.dasm-subtitle {
+  margin: 0;
+  max-width: 840px;
+  color: #435564;
+  line-height: 1.58;
+}
+
+.dasm-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.dasm-grid > * {
+  grid-column: span 12;
+}
+
+@media (min-width: 900px) {
+  .dasm-grid--2 > * {
+    grid-column: span 6;
+  }
+
+  .dasm-grid--3 > * {
+    grid-column: span 4;
+  }
+
+  .dasm-grid--4 > * {
+    grid-column: span 3;
+  }
+}
+
+.dasm-panel {
+  border: 1px solid var(--dasm-border-soft);
+  border-radius: 14px;
+  background: linear-gradient(165deg, #ffffff, #f8fbfd);
+  padding: 0.95rem;
+}
+
+.dasm-stat {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #1d2b36;
+  font-family: 'Fraunces', Georgia, serif;
+}
+
+.dasm-stat-label {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f7f8d;
+}
+
+.db-footer {
+  background: linear-gradient(180deg, #eef3f8, #e4ecf4);
+  color: #607384;
+  border-top: 1px solid rgba(28, 52, 73, 0.12);
+  font-size: 0.85rem;
+}

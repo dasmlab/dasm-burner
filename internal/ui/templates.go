@@ -1,0 +1,242 @@
+package ui
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/dasmlab/dasm-burner/internal/config"
+)
+
+var templateNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+
+type templateMeta struct {
+	Name                 string    `json:"name"`
+	Description          string    `json:"description,omitempty"`
+	Namespaces           int       `json:"namespaces"`
+	RoutesPerNamespace   int       `json:"routesPerNamespace"`
+	ServicesPerNamespace int       `json:"servicesPerNamespace"`
+	ReplicasPerService   int       `json:"replicasPerService"`
+	RouteToService       string    `json:"routeToService"`
+	Counts               any       `json:"counts,omitempty"`
+	UpdatedAt            time.Time `json:"updatedAt"`
+	Active               bool      `json:"active,omitempty"`
+}
+
+func (s *Server) templatesDir() string {
+	dir := filepath.Join(s.RunDir, "templates")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+func (s *Server) activeTemplateName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeTemplate
+}
+
+func (s *Server) setActiveTemplate(name string) {
+	s.mu.Lock()
+	s.activeTemplate = name
+	if name != "" {
+		s.ConfigPath = filepath.Join(s.templatesDir(), name+".yaml")
+	}
+	s.mu.Unlock()
+}
+
+func (s *Server) templates(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{
+			"templates": s.listTemplates(),
+			"active":    s.activeTemplateName(),
+		})
+	case http.MethodPost:
+		s.saveTemplate(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) templateByName(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/v1/templates/")
+	name = strings.Trim(name, "/")
+	if name == "" || strings.Contains(name, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		cfg, err := s.loadTemplate(name)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		out := compactFrom(cfg)
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodPut:
+		// Select this saved template as active (Execute / Topology dropdown).
+		if _, err := s.loadTemplate(name); err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		s.setActiveTemplate(name)
+		cfg, _ := s.loadTemplate(name)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"active":   name,
+			"topology": compactFrom(cfg),
+		})
+	case http.MethodDelete:
+		path := filepath.Join(s.templatesDir(), name+".yaml")
+		if err := os.Remove(path); err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		if s.activeTemplateName() == name {
+			s.setActiveTemplate("")
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": name})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name                 string `json:"name"`
+		SaveAs               string `json:"saveAs"` // optional new name (Save As)
+		Description          string `json:"description"`
+		Namespaces           int    `json:"namespaces"`
+		RoutesPerNamespace   int    `json:"routesPerNamespace"`
+		ServicesPerNamespace int    `json:"servicesPerNamespace"`
+		ReplicasPerService   int    `json:"replicasPerService"`
+		RouteToService       string `json:"routeToService"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	name := strings.TrimSpace(body.SaveAs)
+	if name == "" {
+		name = strings.TrimSpace(body.Name)
+	}
+	if !templateNameRe.MatchString(name) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("template name must be 1-64 chars [A-Za-z0-9._-]"))
+		return
+	}
+	cfg, err := s.cfg()
+	if err != nil {
+		cfg = config.StartingTemplate()
+	}
+	cfg.Metadata.Name = name
+	if body.Description != "" {
+		cfg.Metadata.Description = body.Description
+	}
+	if body.Namespaces > 0 {
+		cfg.Topology.Namespaces.Count = body.Namespaces
+	}
+	if body.RoutesPerNamespace > 0 {
+		cfg.Topology.Routes.PerNamespace = body.RoutesPerNamespace
+	}
+	if body.ServicesPerNamespace > 0 {
+		cfg.Topology.Services.PerNamespace = body.ServicesPerNamespace
+	}
+	if body.ReplicasPerService > 0 {
+		cfg.Topology.Workloads.ReplicasPerService = body.ReplicasPerService
+	}
+	if body.RouteToService != "" {
+		cfg.Topology.Relationships.RouteToService = body.RouteToService
+	}
+	if err := config.Validate(cfg); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	raw, err := cfg.Marshal()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	path := filepath.Join(s.templatesDir(), name+".yaml")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.setActiveTemplate(name)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"saved":     name,
+		"topology":  compactFrom(cfg),
+		"templates": s.listTemplates(),
+	})
+}
+
+func (s *Server) loadTemplate(name string) (*config.Config, error) {
+	if !templateNameRe.MatchString(name) {
+		return nil, fmt.Errorf("invalid template name")
+	}
+	return config.Load(filepath.Join(s.templatesDir(), name+".yaml"))
+}
+
+func (s *Server) listTemplates() []templateMeta {
+	dir := s.templatesDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	active := s.activeTemplateName()
+	var out []templateMeta
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".yaml")
+		cfg, err := config.Load(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		st, _ := e.Info()
+		updated := time.Now()
+		if st != nil {
+			updated = st.ModTime()
+		}
+		out = append(out, templateMeta{
+			Name:                 name,
+			Description:          cfg.Metadata.Description,
+			Namespaces:           cfg.Topology.Namespaces.Count,
+			RoutesPerNamespace:   cfg.Topology.Routes.PerNamespace,
+			ServicesPerNamespace: cfg.Topology.Services.PerNamespace,
+			ReplicasPerService:   cfg.Topology.Workloads.ReplicasPerService,
+			RouteToService:       cfg.Topology.Relationships.RouteToService,
+			Counts:               cfg.Counts(),
+			UpdatedAt:            updated,
+			Active:               name == active,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	return out
+}
+
+func (s *Server) ensureDefaultTemplates() {
+	dir := s.templatesDir()
+	smoke := filepath.Join(dir, "smoke.yaml")
+	if _, err := os.Stat(smoke); err == nil {
+		if s.activeTemplateName() == "" {
+			s.setActiveTemplate("smoke")
+		}
+		return
+	}
+	cfg := config.StartingTemplate()
+	raw, err := cfg.Marshal()
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(smoke, raw, 0o644)
+	s.setActiveTemplate("smoke")
+}
