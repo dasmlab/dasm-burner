@@ -213,15 +213,11 @@ func (s *Server) cfg() (*config.Config, error) {
 }
 
 func (s *Server) liveClient(qps float32, burst int) (kube.Cluster, error) {
-	cs := s.clusterState()
-	cs.mu.Lock()
-	kc := cs.kubeconfig
-	ctxName := cs.context
-	cs.mu.Unlock()
-	if kc == "" {
-		kc = s.Kubeconfig
+	t, err := s.snapshotTarget()
+	if err != nil {
+		return nil, err
 	}
-	return kube.NewLiveContext(kc, ctxName, qps, burst)
+	return t.client(qps, burst)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

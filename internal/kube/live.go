@@ -25,6 +25,14 @@ type Live struct {
 	dyn dynamic.Interface
 }
 
+// Clientset exposes the typed client for observe-only helpers (cleanup watch).
+func (l *Live) Clientset() kubernetes.Interface {
+	if l == nil {
+		return nil
+	}
+	return l.cs
+}
+
 func (l *Live) CreateNamespace(ctx context.Context, ns *corev1.Namespace) error {
 	_, err := l.cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	return err

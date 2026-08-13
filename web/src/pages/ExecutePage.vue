@@ -451,6 +451,14 @@ async function start() {
   cleanupMsg.value = ''
   starting.value = true
   try {
+    const expected = cluster.currentName.value
+    const cur = await cluster.assertCurrent(expected)
+    if (cluster.isInCluster.value) {
+      const ok = window.confirm(
+        `This will burn the HOST in-cluster target:\n\n  ${cur?.name || expected}\n  ${cur?.server || ''}\n\nNOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT.\n\nContinue?`,
+      )
+      if (!ok) return
+    }
     await selectTemplate(templateName.value)
     const data = await startRun({
       template: templateName.value,
@@ -503,7 +511,21 @@ async function doCleanup(scope) {
     template: 'Clean ALL recorded runs for this template on the CURRENT cluster?',
     all: 'Clean ALL managed kb-* namespaces on the CURRENT cluster (every session/template)?',
   }
-  if (!window.confirm(labels[scope] || 'Clean?')) return
+  try {
+    const expected = cluster.currentName.value
+    const cur = await cluster.assertCurrent(expected)
+    if (cluster.isInCluster.value) {
+      const ok = window.confirm(
+        `Cleanup will run on the HOST in-cluster target:\n\n  ${cur?.name || expected}\n  ${cur?.server || ''}\n\n${labels[scope] || 'Clean?'}\n\nContinue?`,
+      )
+      if (!ok) return
+    } else if (!window.confirm(`${labels[scope] || 'Clean?'}\n\nCluster: ${cur?.name || expected}`)) {
+      return
+    }
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+    return
+  }
   cleaning.value = true
   startCleanupPoll()
   try {

@@ -138,7 +138,11 @@ const addError = ref('')
 
 const clusterName = computed({
   get: () => cluster.currentName.value,
-  set: () => {},
+  set: (name) => {
+    // Quasar updates v-model immediately; real switch happens in onClusterChange.
+    // Keep get() authoritative from server so a failed select snaps back.
+    if (!name) return
+  },
 })
 
 const clusterOptions = computed(() =>
@@ -155,6 +159,8 @@ async function onClusterChange(name) {
     await cluster.select(name)
   } catch (e) {
     addError.value = e.response?.data?.error || e.message
+    // Force refresh so the select snaps back to server current.
+    await cluster.refresh().catch(() => {})
   }
 }
 

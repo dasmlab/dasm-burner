@@ -198,6 +198,12 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	batchPlan := runner.PlanBatches(cfg, g.Namespaces)
 	runner.ApplyBatchPlan(cfg, batchPlan)
 
+	target, terr := s.snapshotTarget()
+	if terr != nil {
+		writeError(w, http.StatusBadRequest, terr)
+		return
+	}
+
 	m := s.execMgr()
 	m.mu.Lock()
 	if m.cur != nil && m.cur.Status == "running" {
@@ -211,7 +217,7 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	run := &execRun{
 		ID:          fmt.Sprintf("%s-%d", g.RunID, now.Unix()),
 		Template:    body.Template,
-		Cluster:     s.currentCluster().Name,
+		Cluster:     target.Name,
 		DryRun:      body.DryRun,
 		Status:      "running",
 		RunID:       g.RunID,
@@ -242,6 +248,7 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	s.writeCurrentExec(run)
 
 	run.appendLog("info", "PREFIX", 0, fmt.Sprintf("common prefix %s · pattern %s-ns-00001-xxxx", pfx, pfx))
+	run.appendLog("info", "TARGET", 0, target.logLine())
 	run.appendLog("info", "BATCH", 0, fmt.Sprintf("%s · size=%d waves=%d · %s",
 		batchPlan.Strategy, batchPlan.Size, batchPlan.Count, batchPlan.Reason))
 	if len(cfg.Application.AvoidTaints) == 0 {
@@ -255,10 +262,11 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 			" · nodeAffinity excludes matching infra/role labels")
 	}
 
-	go s.executeRun(ctx, run, cfg, g, body.DryRun, body.SkipBase)
+	go s.executeRun(ctx, run, cfg, g, body.DryRun, body.SkipBase, target)
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"run":         run.snapshot(),
 		"avoidTaints": cfg.Application.AvoidTaints,
+		"cluster":     target,
 		"warning":     "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
@@ -316,7 +324,7 @@ func SplitBatchCount(cfg *config.Config, ns int) int {
 	return plan.Count
 }
 
-func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun, skipBase bool) {
+func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun, skipBase bool, target clusterTarget) {
 	var (
 		lastRep     *runner.Report
 		openHealth  kube.Health
@@ -382,16 +390,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 	}()
 
 	run.setStep("precheck", stepRunning, fmt.Sprintf("%s · starting", run.Prefix))
-	run.appendLog("info", "PRECHECK", 0, fmt.Sprintf("template=%s run=%s prefix=%s dryRun=%v cluster=%s", run.Template, g.RunID, run.Prefix, dryRun, run.Cluster))
-
-	cs := s.clusterState()
-	cs.mu.Lock()
-	kc := cs.kubeconfig
-	ctxName := cs.context
-	cs.mu.Unlock()
-	if kc == "" {
-		kc = s.Kubeconfig
-	}
+	run.appendLog("info", "PRECHECK", 0, fmt.Sprintf("template=%s run=%s prefix=%s dryRun=%v %s", run.Template, g.RunID, run.Prefix, dryRun, target.logLine()))
 
 	var cl kube.Cluster
 	if !dryRun {
@@ -400,7 +399,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 		if qps < 20 {
 			qps = 20
 		}
-		cl, err = kube.NewLiveContext(kc, ctxName, qps, int(qps)*2)
+		cl, err = target.client(qps, int(qps)*2)
 		if err != nil {
 			run.fail("precheck", err.Error())
 			return
@@ -419,7 +418,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 	if !dryRun {
 		_ = os.MkdirAll(kbDir, 0o755)
 		promURL, tokenFile := "", ""
-		if p, err := burner.DiscoverPrometheus(ctx, kc, filepath.Join(kbDir, "prometheus.token")); err != nil {
+		if p, err := burner.DiscoverPrometheus(ctx, target.Kubeconfig, filepath.Join(kbDir, "prometheus.token")); err != nil {
 			run.appendLog("warn", "MEASURE", 0, "prometheus discover: "+err.Error()+" (index/alerts skipped)")
 		} else {
 			prom = p
@@ -456,7 +455,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 					dur = time.Duration(nBatches)*45*time.Second + time.Minute
 				}
 				indexStart = time.Now()
-				mp, err := burner.StartMeasure(ctx, kbBin, kbFiles.MeasureConfig, kc, g.RunID, userMeta, dur)
+				mp, err := burner.StartMeasure(ctx, kbBin, kbFiles.MeasureConfig, target.Kubeconfig, g.RunID, userMeta, dur)
 				if err != nil {
 					run.appendLog("warn", "MEASURE", 0, "start measure: "+err.Error())
 				} else {
@@ -506,7 +505,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 		}
 		if kbBin != "" && prom != nil && kbFiles != nil {
 			run.appendLog("info", "INDEX", 0, "kube-burner index → "+collected)
-			if ierr := burner.Index(context.Background(), kbBin, kc, prom.URL, prom.TokenFile, kbFiles.MetricsProfile, collected, g.RunID, userMeta, indexStart.Add(-30*time.Second), end); ierr != nil {
+			if ierr := burner.Index(context.Background(), kbBin, target.Kubeconfig, prom.URL, prom.TokenFile, kbFiles.MetricsProfile, collected, g.RunID, userMeta, indexStart.Add(-30*time.Second), end); ierr != nil {
 				run.appendLog("warn", "INDEX", 0, ierr.Error())
 			} else {
 				run.appendLog("info", "INDEX", 0, "metrics indexed (local + tarball)")

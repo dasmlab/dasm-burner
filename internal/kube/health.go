@@ -43,6 +43,18 @@ type Health struct {
 
 	WarningEvents int `json:"warningEvents"`
 	ErrorEvents   int `json:"errorEvents"`
+
+	NodeRoles []NodeRoleCount `json:"nodeRoles,omitempty"`
+}
+
+// NodeRoleCount is Ready/NotReady for one node-role.kubernetes.io/* label.
+// Multi-role nodes count in each matching bucket.
+type NodeRoleCount struct {
+	Role     string   `json:"role"`
+	Ready    int      `json:"ready"`
+	NotReady int      `json:"notReady"`
+	Total    int      `json:"total"`
+	Nodes    []string `json:"nodes,omitempty"` // NotReady node names
 }
 
 func (l *Live) ClusterHealth(ctx context.Context, runID string) (Health, error) {
@@ -60,6 +72,7 @@ func (l *Live) ClusterHealth(ctx context.Context, runID string) (Health, error) 
 			h.NotReadyNodes = append(h.NotReadyNodes, n.Name)
 		}
 	}
+	h.NodeRoles = countNodeRoles(nodes.Items)
 
 	sel := topology.Selector(runID)
 	pods, err := l.cs.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: sel})
@@ -194,4 +207,59 @@ func eventRecent(e corev1.Event, since time.Time) bool {
 		return e.EventTime.Time.After(since)
 	}
 	return true
+}
+
+var nodeRoleOrder = []string{"control-plane", "master", "worker", "infra", "other"}
+
+func countNodeRoles(nodes []corev1.Node) []NodeRoleCount {
+	byRole := map[string]*NodeRoleCount{}
+	ensure := func(role string) *NodeRoleCount {
+		if c, ok := byRole[role]; ok {
+			return c
+		}
+		c := &NodeRoleCount{Role: role}
+		byRole[role] = c
+		return c
+	}
+	for _, n := range nodes {
+		roles := nodeRolesFromLabels(n.Labels)
+		ready := nodeReady(n)
+		for _, role := range roles {
+			c := ensure(role)
+			c.Total++
+			if ready {
+				c.Ready++
+			} else {
+				c.NotReady++
+				c.Nodes = append(c.Nodes, n.Name)
+			}
+		}
+	}
+	var out []NodeRoleCount
+	for _, role := range nodeRoleOrder {
+		if c, ok := byRole[role]; ok {
+			out = append(out, *c)
+			delete(byRole, role)
+		}
+	}
+	for _, c := range byRole {
+		out = append(out, *c)
+	}
+	return out
+}
+
+func nodeRolesFromLabels(labels map[string]string) []string {
+	if labels == nil {
+		return []string{"other"}
+	}
+	var roles []string
+	for _, role := range []string{"control-plane", "master", "worker", "infra"} {
+		if _, ok := labels["node-role.kubernetes.io/"+role]; ok {
+			roles = append(roles, role)
+		}
+	}
+	if len(roles) == 0 {
+		return []string{"other"}
+	}
+	return roles
 }

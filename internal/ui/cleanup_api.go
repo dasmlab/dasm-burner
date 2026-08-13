@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dasmlab/dasm-burner/internal/cleanupwatch"
 	"github.com/dasmlab/dasm-burner/internal/kube"
 	"github.com/dasmlab/dasm-burner/internal/report"
 	"github.com/dasmlab/dasm-burner/internal/runner"
@@ -320,7 +321,15 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 	s.cleanupBusy = true
 	s.mu.Unlock()
 
-	cl, err := s.liveClient(20, 40)
+	target, terr := s.snapshotTarget()
+	if terr != nil {
+		s.mu.Lock()
+		s.cleanupBusy = false
+		s.mu.Unlock()
+		writeError(w, http.StatusBadRequest, terr)
+		return
+	}
+	cl, err := target.client(20, 40)
 	if err != nil {
 		s.mu.Lock()
 		s.cleanupBusy = false
@@ -328,7 +337,7 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	cluster := s.currentCluster().Name
+	cluster := target.Name
 	sink := s.ensureLogSink()
 	logf := func(level, msg string) {
 		sink.appendLog(level, "CLEANUP", 0, msg)
@@ -396,8 +405,8 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logf("info", fmt.Sprintf("start scope=%s template=%s cluster=%s dryRun=%v wait=%v (async; independent of HTTP/route timeout)",
-		body.Scope, orEmpty(body.Template, "—"), cluster, body.DryRun, body.Wait))
+	logf("info", fmt.Sprintf("start scope=%s template=%s %s dryRun=%v wait=%v (async; independent of HTTP/route timeout)",
+		body.Scope, orEmpty(body.Template, "—"), target.logLine(), body.DryRun, body.Wait))
 	if body.Scope == "all" {
 		logf("warn", "targeting ALL managed namespaces (any run / any template) on this cluster")
 	} else {
@@ -412,6 +421,7 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 		"scope":    body.Scope,
 		"dryRun":   body.DryRun,
 		"cluster":  cluster,
+		"target":   target,
 		"run":      sink.snapshot(),
 		"warning":  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 		"note":     "Cleanup runs in the background; watch the live log. Poll /api/v1/cleanup until cleaning=false.",
@@ -442,6 +452,14 @@ func (s *Server) runCleanupJob(cl kube.Cluster, runIDs []string, scope, template
 	// Detached from HTTP request — survives OpenShift route ~30s idle timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Minute)
 	defer cancel()
+
+	var watch *cleanupwatch.Watcher
+	if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil {
+		watch = cleanupwatch.Start(live.Clientset(), 15*time.Second, func(level, msg string) {
+			sink.appendLog(level, "CLUSTER", 0, msg)
+			logLines = append(logLines, report.CleanupLogLine{At: time.Now(), Level: level, Message: msg})
+		})
+	}
 
 	started := time.Now()
 	hadErr := false
@@ -525,6 +543,32 @@ func (s *Server) runCleanupJob(cl kube.Cluster, runIDs []string, scope, template
 		Namespaces: allNS,
 		Error:      lastErr,
 		Logs:       logLines,
+	}
+	if watch != nil {
+		obs := watch.Stop()
+		co := &report.ClusterObservation{
+			Summary:           obs.Summary,
+			MaxNotReady:       obs.MaxNotReady,
+			MaxNotReadyDurSec: obs.MaxNotReadyDurSec,
+			MonitoringOOM:     obs.MonitoringOOM,
+			WorstNodes:        append([]string(nil), obs.WorstNodes...),
+		}
+		for _, s := range obs.Samples {
+			co.Samples = append(co.Samples, report.ClusterSample{
+				At: s.At, NodesReady: s.NodesReady, NodesNotReady: s.NodesNotReady,
+				MemoryPressure: s.MemoryPressure, DiskPressure: s.DiskPressure, PIDPressure: s.PIDPressure,
+				MonitoringReady: s.MonitoringReady, MonitoringTotal: s.MonitoringTotal,
+				MonitoringOOM: s.MonitoringOOM, MonitoringRestarts: s.MonitoringRestarts,
+				NotReadyNodes: append([]string(nil), s.NotReadyNodes...),
+			})
+		}
+		for _, in := range obs.Incidents {
+			co.Incidents = append(co.Incidents, report.ClusterIncident{
+				At: in.At, Kind: in.Kind, Message: in.Message, Node: in.Node,
+			})
+		}
+		doc.ClusterObservation = co
+		logf("info", "CLUSTER observation: "+obs.Summary)
 	}
 	if id, err := report.WriteCleanupReport(s.RunDir, doc); err != nil {
 		logf("warn", "cleanup report save failed: "+err.Error())

@@ -27,25 +27,60 @@ type CleanupObjectTotals struct {
 
 // CleanupReport is an immutable record of one cleanup job.
 type CleanupReport struct {
-	ID         string              `json:"id"`
-	Scope      string              `json:"scope"` // last | template | all
-	Template   string              `json:"template,omitempty"`
-	Cluster    string              `json:"cluster,omitempty"`
-	DryRun     bool                `json:"dryRun"`
-	Waited     bool                `json:"waited"`
-	Status     string              `json:"status"` // passed | failed | partial
-	RunIDs     []string            `json:"runIds,omitempty"`
-	Started    time.Time           `json:"started"`
-	Finished   time.Time           `json:"finished"`
-	DurationMs int64               `json:"durationMs"`
-	Duration   string              `json:"duration"` // human, e.g. 12m34s
-	Targeted   CleanupObjectTotals `json:"targeted"`
-	DeletedNS  int                 `json:"deletedNamespaces"`
-	Remaining  int                 `json:"remainingNamespaces"`
-	Namespaces []string            `json:"namespaces,omitempty"`
-	Error      string              `json:"error,omitempty"`
-	Logs       []CleanupLogLine    `json:"logs,omitempty"`
-	Warning    string              `json:"warning"`
+	ID                  string               `json:"id"`
+	Scope               string               `json:"scope"` // last | template | all
+	Template            string               `json:"template,omitempty"`
+	Cluster             string               `json:"cluster,omitempty"`
+	DryRun              bool                 `json:"dryRun"`
+	Waited              bool                 `json:"waited"`
+	Status              string               `json:"status"` // passed | failed | partial
+	RunIDs              []string             `json:"runIds,omitempty"`
+	Started             time.Time            `json:"started"`
+	Finished            time.Time            `json:"finished"`
+	DurationMs          int64                `json:"durationMs"`
+	Duration            string               `json:"duration"` // human, e.g. 12m34s
+	Targeted            CleanupObjectTotals  `json:"targeted"`
+	DeletedNS           int                  `json:"deletedNamespaces"`
+	Remaining           int                  `json:"remainingNamespaces"`
+	Namespaces          []string             `json:"namespaces,omitempty"`
+	Error               string               `json:"error,omitempty"`
+	Logs                []CleanupLogLine     `json:"logs,omitempty"`
+	ClusterObservation  *ClusterObservation  `json:"clusterObservation,omitempty"`
+	Warning             string               `json:"warning"`
+}
+
+// ClusterObservation captures node/monitoring health during cleanup.
+type ClusterObservation struct {
+	Samples             []ClusterSample   `json:"samples,omitempty"`
+	Incidents           []ClusterIncident `json:"incidents,omitempty"`
+	Summary             string            `json:"summary,omitempty"`
+	MaxNotReady         int               `json:"maxNotReady"`
+	MaxNotReadyDurSec   int64             `json:"maxNotReadyDurationSec,omitempty"`
+	MonitoringOOM       int               `json:"monitoringOOMTotal"`
+	WorstNodes          []string          `json:"worstNodes,omitempty"`
+}
+
+// ClusterSample is one cleanup-watch poll.
+type ClusterSample struct {
+	At                 time.Time `json:"at"`
+	NodesReady         int       `json:"nodesReady"`
+	NodesNotReady      int       `json:"nodesNotReady"`
+	MemoryPressure     int       `json:"memoryPressure"`
+	DiskPressure       int       `json:"diskPressure"`
+	PIDPressure        int       `json:"pidPressure"`
+	MonitoringReady    int       `json:"monitoringReady"`
+	MonitoringTotal    int       `json:"monitoringTotal"`
+	MonitoringOOM      int       `json:"monitoringOOM"`
+	MonitoringRestarts int       `json:"monitoringRestarts"`
+	NotReadyNodes      []string  `json:"notReadyNodes,omitempty"`
+}
+
+// ClusterIncident is a notable transition during cleanup.
+type ClusterIncident struct {
+	At      time.Time `json:"at"`
+	Kind    string    `json:"kind"`
+	Message string    `json:"message"`
+	Node    string    `json:"node,omitempty"`
 }
 
 // CleanupListItem is a compact row for listing cleanup reports.
