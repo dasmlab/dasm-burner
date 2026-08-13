@@ -39,7 +39,7 @@
           <q-item-section avatar><q-icon name="monitor_heart" /></q-item-section>
           <q-item-section>
             <q-item-label>Health</q-item-label>
-            <q-item-label caption>nodes, OVN, abort gates</q-item-label>
+            <q-item-label caption>cluster pulse · mixes</q-item-label>
           </q-item-section>
         </q-item>
         <q-item clickable v-ripple :to="{ name: 'topology' }" active-class="text-primary bg-grey-2">

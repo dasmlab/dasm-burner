@@ -12,6 +12,8 @@ export const getVersion = () => api.get('/version').then((r) => r.data)
 export const getPlan = () => api.get('/plan').then((r) => r.data)
 export const getStatus = () => api.get('/status').then((r) => r.data)
 export const getHealth = () => api.get('/health').then((r) => r.data)
+export const getOverview = () => api.get('/overview').then((r) => r.data)
+export const clearHealthBaseline = () => api.post('/health/baseline', {}).then((r) => r.data)
 export const getReport = (id) =>
   api.get('/report', { params: id ? { id } : {} }).then((r) => r.data)
 export const listReports = () => api.get('/reports').then((r) => r.data)

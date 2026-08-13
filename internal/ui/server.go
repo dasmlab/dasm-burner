@@ -57,6 +57,8 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/plan", s.protect(s.plan))
 	s.Mux.Handle("/api/v1/status", s.protect(s.status))
 	s.Mux.Handle("/api/v1/health", s.protect(s.health))
+	s.Mux.Handle("/api/v1/health/baseline", s.protect(s.healthBaselineAPI))
+	s.Mux.Handle("/api/v1/overview", s.protect(s.overview))
 	s.Mux.Handle("/api/v1/report", s.protect(s.report))
 	s.Mux.Handle("/api/v1/reports", s.protect(s.reports))
 	s.Mux.Handle("/api/v1/reports/", s.protect(s.reportByID))
