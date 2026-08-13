@@ -217,8 +217,11 @@ jobs:
           mkdir -p dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications
           cp k8s_envelope/argocd-application.yaml \
             dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications/dasm-burner.yaml
-          cp k8s_envelope/argocd-application-previews.yaml \
-            dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications/dasm-burner-previews.yaml
+          # Previews Application lives on development first; copy when present.
+          if [ -f k8s_envelope/argocd-application-previews.yaml ]; then
+            cp k8s_envelope/argocd-application-previews.yaml \
+              dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications/dasm-burner-previews.yaml
+          fi
           for old in "${DEPLOY_DIR}"/dasm-burner-v*.yaml; do
             [ -e "${old}" ] && mv "${old}" "${ARCHIVE_DIR}/"
           done
