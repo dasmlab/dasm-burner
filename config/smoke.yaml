@@ -33,7 +33,7 @@ naming:
 
 deployment:
   mode: batch
-  batchSize: 1
+  batchSize: 0 # auto breakpoints (≤8 waves)
   batchDelay: 1s
   apiConcurrency: 8
   waitForReady: true

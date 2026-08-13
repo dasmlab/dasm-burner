@@ -21,7 +21,7 @@ func StartingTemplate() *Config {
 	c.Topology.Relationships.RouteToService = RelOneToOne
 	c.Naming.Seed = Seed{Auto: false, Value: 1837291}
 	c.Deployment.Mode = DeployBatch
-	c.Deployment.BatchSize = 1
+	c.Deployment.BatchSize = 0 // auto breakpoints
 	c.Deployment.APIConcurrency = 8
 	return c
 }
@@ -71,7 +71,7 @@ func Default() *Config {
 		},
 		Deployment: Deployment{
 			Mode:             DeployBatch,
-			BatchSize:        50,
+			BatchSize:        0, // 0 = auto breakpoints (≤8 waves)
 			BatchDelay:       Duration(5 * time.Second),
 			APIConcurrency:   20,
 			WaitForReady:     true,
@@ -192,9 +192,11 @@ func ApplyDefaults(c *Config) {
 	if c.Deployment.Mode == "" {
 		c.Deployment.Mode = d.Deployment.Mode
 	}
-	if c.Deployment.BatchSize == 0 {
-		c.Deployment.BatchSize = d.Deployment.BatchSize
+	// Legacy smoke templates used batchSize:1 (one NS per wave). Prefer auto breakpoints.
+	if c.Deployment.BatchSize == 1 {
+		c.Deployment.BatchSize = 0
 	}
+	// BatchSize 0 means auto breakpoints — do not fill from defaults.
 	if c.Deployment.APIConcurrency == 0 {
 		c.Deployment.APIConcurrency = d.Deployment.APIConcurrency
 	}

@@ -111,12 +111,14 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	plan := runner.PlanBatches(cfg, g.Namespaces)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"runId":   g.RunID,
-		"seed":    g.Seed,
-		"name":    cfg.Metadata.Name,
-		"counts":  g.Counts,
-		"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+		"runId":     g.RunID,
+		"seed":      g.Seed,
+		"name":      cfg.Metadata.Name,
+		"counts":    g.Counts,
+		"batchPlan": plan,
+		"warning":   "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
 

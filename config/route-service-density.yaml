@@ -43,10 +43,10 @@ naming:
     prefix: deploy
     randomLength: 4
 
-# Phase 2+ — parsed and defaulted now, not executed by generate.
+# Phase 2+ — batchSize 0 = smart breakpoints (max 8 waves; 2500 → ~313 NS/wave).
 deployment:
   mode: batch
-  batchSize: 50
+  batchSize: 0
   batchDelay: 5s
   apiConcurrency: 20
   waitForReady: true

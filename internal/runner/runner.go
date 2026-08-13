@@ -69,8 +69,12 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		log(PhaseBaseline, 0, "skipped")
 	}
 
+	plan := PlanBatches(cfg, g.Namespaces)
+	ApplyBatchPlan(cfg, plan)
 	batches := planBatches(cfg, g.Namespaces)
-	log(PhasePrecheck, 0, fmt.Sprintf("mode=%s batches=%d namespaces=%d concurrency=%d", cfg.Deployment.Mode, len(batches), len(g.Namespaces), cfg.Deployment.APIConcurrency))
+	log(PhasePrecheck, 0, fmt.Sprintf("mode=%s strategy=%s batches=%d namespaces=%d size=%d concurrency=%d",
+		plan.Mode, plan.Strategy, len(batches), len(g.Namespaces), plan.Size, cfg.Deployment.APIConcurrency))
+	log(PhasePrecheck, 0, plan.Reason)
 
 	gate := &abortGate{}
 	switch cfg.Deployment.Mode {
@@ -122,11 +126,8 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 }
 
 func planBatches(cfg *config.Config, namespaces []topology.Namespace) [][]topology.Namespace {
-	size := cfg.Deployment.BatchSize
-	if cfg.Deployment.Mode == config.DeploySequential {
-		size = 1
-	}
-	return SplitBatches(namespaces, size)
+	batches, _ := SplitByPlan(cfg, namespaces)
+	return batches
 }
 
 func runBatch(ctx context.Context, opts Options, rep *Report, log func(Phase, int, string), id int, batch []topology.Namespace, gate *abortGate) error {

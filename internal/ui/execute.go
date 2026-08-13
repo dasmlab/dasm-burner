@@ -191,6 +191,8 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	batchPlan := runner.PlanBatches(cfg, g.Namespaces)
+	runner.ApplyBatchPlan(cfg, batchPlan)
 
 	m := s.execMgr()
 	m.mu.Lock()
@@ -221,6 +223,8 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	m.mu.Unlock()
 
 	run.appendLog("info", "PREFIX", 0, fmt.Sprintf("common prefix %s · pattern %s-ns-00001-xxxx", pfx, pfx))
+	run.appendLog("info", "BATCH", 0, fmt.Sprintf("%s · size=%d waves=%d · %s",
+		batchPlan.Strategy, batchPlan.Size, batchPlan.Count, batchPlan.Reason))
 
 	go s.executeRun(ctx, run, cfg, g, body.DryRun, body.SkipBase)
 	writeJSON(w, http.StatusAccepted, map[string]any{
@@ -267,38 +271,19 @@ func formatSeqRange(from, to int) string {
 	return fmt.Sprintf("%05d--%05d", from, to)
 }
 
-// plannedBatches mirrors runner batching (including rate = 1 NS per batch).
+// plannedBatches uses the same smart PlanBatches / SplitByPlan as the runner.
 func plannedBatches(cfg *config.Config, namespaces []topology.Namespace) [][]topology.Namespace {
-	if cfg.Deployment.Mode == config.DeployRate {
-		out := make([][]topology.Namespace, 0, len(namespaces))
-		for _, ns := range namespaces {
-			out = append(out, []topology.Namespace{ns})
-		}
-		return out
-	}
-	size := cfg.Deployment.BatchSize
-	if cfg.Deployment.Mode == config.DeploySequential {
-		size = 1
-	}
-	return runner.SplitBatches(namespaces, size)
+	batches, _ := runner.SplitByPlan(cfg, namespaces)
+	return batches
 }
 
 func SplitBatchCount(cfg *config.Config, ns int) int {
-	if ns < 1 {
-		return 0
+	fake := make([]topology.Namespace, ns)
+	for i := range fake {
+		fake[i].Index = i + 1
 	}
-	size := cfg.Deployment.BatchSize
-	if cfg.Deployment.Mode == config.DeploySequential {
-		size = 1
-	}
-	if size < 1 {
-		size = ns
-	}
-	n := (ns + size - 1) / size
-	if cfg.Deployment.Mode == config.DeployRate {
-		return ns
-	}
-	return n
+	plan := runner.PlanBatches(cfg, fake)
+	return plan.Count
 }
 
 func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun, skipBase bool) {

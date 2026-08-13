@@ -7,7 +7,7 @@ import (
 	"github.com/dasmlab/dasm-burner/internal/topology"
 )
 
-const largeNamespaceThreshold = 10
+const largeNamespaceThreshold = 10 // used by EnsureSafe; batch caps live in batchplan.go
 
 func EnsureSafe(cfg *config.Config, dryRun, confirm, allowLarge bool) error {
 	if dryRun {
