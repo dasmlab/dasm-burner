@@ -6,7 +6,7 @@ dasm-burner is a **control plane around** [kube-burner](https://kube-burner.gith
 - Config (`global`, jobs, go-templates): [Configuration reference](https://kube-burner.github.io/kube-burner/latest/reference/configuration/#global)
 - Source: [github.com/kube-burner/kube-burner](https://github.com/kube-burner/kube-burner)
 
-Pinned release: **v2.8.1**. Install with `make kube-burner` → `./bin/kube-burner`. Override with `KUBE_BURNER=/path/to/kube-burner`.
+Pinned release: **v2.8.1**. Install with `make kube-burner` → `./bin/kube-burner`. Override with `KUBE_BURNER=/path/to/kube-burner`. The product image ships the same binary at `/usr/local/bin/kube-burner` (`KUBE_BURNER` set in the Containerfile).
 
 ---
 
