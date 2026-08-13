@@ -18,6 +18,7 @@ const router = createRouter({
         { path: 'topology', name: 'topology', component: () => import('src/pages/TopologyPage.vue'), meta: { admin: true } },
         { path: 'execute', name: 'execute', component: () => import('src/pages/ExecutePage.vue'), meta: { admin: true } },
         { path: 'report', name: 'report', component: () => import('src/pages/ReportPage.vue'), meta: { admin: true } },
+        { path: 'cleanup-reports', name: 'cleanup-reports', component: () => import('src/pages/CleanupReportsPage.vue'), meta: { admin: true } },
       ],
     },
   ],

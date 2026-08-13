@@ -72,6 +72,8 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/runs/", s.protect(s.runAction))
 	s.Mux.Handle("/api/v1/cleanup", s.protect(s.cleanupAPI))
 	s.Mux.Handle("/api/v1/cleanup/check", s.protect(s.cleanupCheck))
+	s.Mux.Handle("/api/v1/cleanup-reports", s.protect(s.cleanupReportsAPI))
+	s.Mux.Handle("/api/v1/cleanup-reports/", s.protect(s.cleanupReportByID))
 	s.Mux.Handle("/api/v1/kube-burner-preview", s.protect(s.kubeBurnerPreview))
 	s.Mux.HandleFunc("/", s.spa)
 	return s

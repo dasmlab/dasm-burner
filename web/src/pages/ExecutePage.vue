@@ -16,7 +16,19 @@
       Run <strong>{{ runPrefix }}</strong> was interrupted (server restart). Pipeline/log restored from disk —
       apply may still be live on the cluster. Use Refresh / check state, then Clean if needed.
     </div>
-    <div v-if="cleanupMsg" class="dasm-panel q-mb-md text-positive">{{ cleanupMsg }}</div>
+    <div v-if="cleanupMsg" class="dasm-panel q-mb-md text-positive">
+      {{ cleanupMsg }}
+      <q-btn
+        v-if="lastCleanupReportId"
+        flat
+        dense
+        color="primary"
+        class="q-ml-sm"
+        icon="delete_sweep"
+        label="Open cleanup report"
+        :to="{ name: 'cleanup-reports', query: { id: lastCleanupReportId } }"
+      />
+    </div>
 
     <div class="row q-col-gutter-md q-mb-md">
       <div class="col-12 col-md-5">
@@ -231,6 +243,7 @@ import {
   clearRunLog,
   getCleanupStatus,
   getRun,
+  listCleanupReports,
   listTemplates,
   postCleanup,
   selectTemplate,
@@ -242,6 +255,7 @@ import { useCluster } from 'src/services/cluster'
 const cluster = useCluster()
 const error = ref('')
 const cleanupMsg = ref('')
+const lastCleanupReportId = ref('')
 const templates = ref([])
 const templateName = ref('')
 const dryRun = ref(true)
@@ -475,6 +489,7 @@ async function doCleanup(scope) {
     cleanupMsg.value = `Cleanup ${scope} started in background on ${data.cluster || cluster.currentLabel.value} — watch live log (waits up to ~45m for slow NS deletes).`
     // Poll until server reports cleaning=false (survives route timeouts).
     const deadline = Date.now() + 50 * 60 * 1000
+    let reportId = ''
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 3000))
       await poll()
@@ -482,15 +497,18 @@ async function doCleanup(scope) {
       if (st) {
         deploy.value = st.template || null
         if (!st.cleaning) {
+          const latest = await listCleanupReports().catch(() => null)
+          reportId = latest?.reports?.[0]?.id || ''
           cleanupMsg.value = st.template?.deployed
             ? `Cleanup finished but namespaces remain on ${st.cluster || ''} — see live log.`
-            : `Cleanup ${scope} finished on ${st.cluster || cluster.currentLabel.value}.`
+            : `Cleanup ${scope} finished on ${st.cluster || cluster.currentLabel.value}${reportId ? ` · report ${reportId}` : ''}.`
           break
         }
       }
     }
     await refreshDeploy()
     await poll()
+    if (reportId) lastCleanupReportId.value = reportId
   } catch (e) {
     error.value = e.response?.data?.error || e.message
     await poll()

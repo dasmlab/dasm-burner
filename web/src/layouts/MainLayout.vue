@@ -63,6 +63,13 @@
             <q-item-label caption>immutable snapshots</q-item-label>
           </q-item-section>
         </q-item>
+        <q-item clickable v-ripple :to="{ name: 'cleanup-reports' }" active-class="text-primary bg-grey-2">
+          <q-item-section avatar><q-icon name="delete_sweep" /></q-item-section>
+          <q-item-section>
+            <q-item-label>Cleanup reports</q-item-label>
+            <q-item-label caption>duration · NS · logs</q-item-label>
+          </q-item-section>
+        </q-item>
       </q-list>
     </q-drawer>
 

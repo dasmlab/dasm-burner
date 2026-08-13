@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dasmlab/dasm-burner/internal/kube"
+	"github.com/dasmlab/dasm-burner/internal/report"
 	"github.com/dasmlab/dasm-burner/internal/runner"
 )
 
@@ -416,7 +417,7 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 		"note":     "Cleanup runs in the background; watch the live log. Poll /api/v1/cleanup until cleaning=false.",
 	})
 
-	go s.runCleanupJob(cl, runIDs, body.Wait, body.DryRun, cluster, sink)
+	go s.runCleanupJob(cl, runIDs, body.Scope, body.Template, body.Wait, body.DryRun, cluster, sink)
 }
 
 func (s *Server) isCleanupBusy() bool {
@@ -425,15 +426,17 @@ func (s *Server) isCleanupBusy() bool {
 	return s.cleanupBusy
 }
 
-func (s *Server) runCleanupJob(cl kube.Cluster, runIDs []string, wait, dryRun bool, cluster string, sink *execRun) {
+func (s *Server) runCleanupJob(cl kube.Cluster, runIDs []string, scope, template string, wait, dryRun bool, cluster string, sink *execRun) {
 	defer func() {
 		s.mu.Lock()
 		s.cleanupBusy = false
 		s.mu.Unlock()
 	}()
 
+	var logLines []report.CleanupLogLine
 	logf := func(level, msg string) {
 		sink.appendLog(level, "CLEANUP", 0, msg)
+		logLines = append(logLines, report.CleanupLogLine{At: time.Now(), Level: level, Message: msg})
 	}
 
 	// Detached from HTTP request — survives OpenShift route ~30s idle timeout.
@@ -442,8 +445,21 @@ func (s *Server) runCleanupJob(cl kube.Cluster, runIDs []string, wait, dryRun bo
 
 	started := time.Now()
 	hadErr := false
+	var lastErr string
 	deleted := 0
+	remaining := 0
+	var allNS []string
+	var totals report.CleanupObjectTotals
+	seenNS := map[string]bool{}
+
 	for _, rid := range runIDs {
+		if snap, err := cl.ListManaged(ctx, rid); err == nil {
+			totals.Namespaces += snap.Namespaces
+			totals.Services += snap.Services
+			totals.Routes += snap.Routes
+			totals.Deployments += snap.Deployments
+			totals.Pods += snap.Pods
+		}
 		nsCount := 0
 		if wait && !dryRun {
 			if names, err := cl.ListManagedNamespaces(ctx, rid); err == nil {
@@ -464,17 +480,55 @@ func (s *Server) runCleanupJob(cl kube.Cluster, runIDs []string, wait, dryRun bo
 		})
 		if res != nil {
 			deleted += len(res.Namespaces)
+			remaining += len(res.Remaining)
+			for _, n := range res.Namespaces {
+				if !seenNS[n] {
+					allNS = append(allNS, n)
+					seenNS[n] = true
+				}
+			}
 		}
 		if err != nil {
 			hadErr = true
+			lastErr = err.Error()
 			logf("error", err.Error())
 		}
 	}
 
-	dur := time.Since(started)
+	fin := time.Now()
+	dur := fin.Sub(started)
+	status := "passed"
+	if hadErr && deleted > 0 {
+		status = "partial"
+	} else if hadErr {
+		status = "failed"
+	}
 	if hadErr {
 		logf("error", fmt.Sprintf("finished with errors in %s · attempted %d NS", dur.Round(time.Millisecond), deleted))
 	} else {
 		logf("info", fmt.Sprintf("done in %s · %d namespace(s)", dur.Round(time.Millisecond), deleted))
+	}
+
+	doc := &report.CleanupReport{
+		Scope:      scope,
+		Template:   template,
+		Cluster:    cluster,
+		DryRun:     dryRun,
+		Waited:     wait && !dryRun,
+		Status:     status,
+		RunIDs:     append([]string(nil), runIDs...),
+		Started:    started,
+		Finished:   fin,
+		Targeted:   totals,
+		DeletedNS:  deleted,
+		Remaining:  remaining,
+		Namespaces: allNS,
+		Error:      lastErr,
+		Logs:       logLines,
+	}
+	if id, err := report.WriteCleanupReport(s.RunDir, doc); err != nil {
+		logf("warn", "cleanup report save failed: "+err.Error())
+	} else {
+		logf("info", "cleanup report saved · "+id+" · open Cleanup reports")
 	}
 }
