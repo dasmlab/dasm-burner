@@ -5,8 +5,6 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"github.com/dasmlab/dasm-burner/internal/auth"
 	"github.com/dasmlab/dasm-burner/internal/config"
 	"github.com/dasmlab/dasm-burner/internal/kube"
-	"github.com/dasmlab/dasm-burner/internal/report"
 	"github.com/dasmlab/dasm-burner/internal/runner"
 	"github.com/dasmlab/dasm-burner/internal/topology"
 )
@@ -61,6 +58,8 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/status", s.protect(s.status))
 	s.Mux.Handle("/api/v1/health", s.protect(s.health))
 	s.Mux.Handle("/api/v1/report", s.protect(s.report))
+	s.Mux.Handle("/api/v1/reports", s.protect(s.reports))
+	s.Mux.Handle("/api/v1/reports/", s.protect(s.reportByID))
 	s.Mux.Handle("/api/v1/topology", s.protect(s.topology))
 	s.Mux.Handle("/api/v1/templates", s.protect(s.templates))
 	s.Mux.Handle("/api/v1/templates/", s.protect(s.templateByName))
@@ -170,44 +169,6 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	}
 	d := runner.Evaluate(cfg.Safety, h)
 	writeJSON(w, http.StatusOK, d)
-}
-
-func (s *Server) report(w http.ResponseWriter, r *http.Request) {
-	path := filepath.Join(s.RunDir, "report.json")
-	b, err := os.ReadFile(path)
-	if err == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(b)
-		return
-	}
-	cfg, err := s.cfg()
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	g, err := topology.Generate(cfg)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	var apply *runner.Report
-	if raw, err := os.ReadFile(filepath.Join(s.RunDir, "apply-report.json")); err == nil {
-		_ = json.Unmarshal(raw, &apply)
-	}
-	var health kube.Health
-	if cl, err := s.liveClient(20, 40); err == nil {
-		health, _ = cl.ClusterHealth(r.Context(), g.RunID)
-	}
-	doc, err := report.Build(health, apply, filepath.Join(s.RunDir, "kube-burner", "collected"))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if doc.RunID == "" {
-		doc.RunID = g.RunID
-	}
-	writeJSON(w, http.StatusOK, doc)
 }
 
 func (s *Server) spa(w http.ResponseWriter, r *http.Request) {

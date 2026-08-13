@@ -66,6 +66,7 @@ type execRun struct {
 	Error       string             `json:"error,omitempty"`
 	Convergence any                `json:"convergence,omitempty"`
 	ReportURL   string             `json:"reportUrl,omitempty"`
+	SnapshotID  string             `json:"snapshotId,omitempty"`
 	Warning     string             `json:"warning"`
 	mu          sync.Mutex         `json:"-"`
 	cancel      context.CancelFunc `json:"-"`
@@ -301,6 +302,11 @@ func SplitBatchCount(cfg *config.Config, ns int) int {
 }
 
 func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun, skipBase bool) {
+	var (
+		lastRep    *runner.Report
+		openHealth kube.Health
+	)
+
 	defer func() {
 		fin := time.Now()
 		run.mu.Lock()
@@ -322,17 +328,33 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			started = fin
 		}
 		run.mu.Unlock()
+
+		snapID := ""
+		if lastRep != nil {
+			if id, err := s.persistRunSnapshot(run, g, lastRep, openHealth, status, dryRun); err == nil && id != "" {
+				snapID = id
+				run.mu.Lock()
+				run.SnapshotID = id
+				run.ReportURL = "/report?id=" + id
+				run.mu.Unlock()
+				run.appendLog("info", "REPORT", 0, "immutable snapshot "+id)
+			} else if err != nil {
+				run.appendLog("warn", "REPORT", 0, "snapshot failed: "+err.Error())
+			}
+		}
+
 		if !dryRun && rid != "" {
 			s.recordHistory(runHistoryEntry{
-				RunID:    rid,
-				Template: tmpl,
-				Prefix:   pfx,
-				Seed:     seed,
-				DryRun:   false,
-				Started:  started,
-				Finished: fin,
-				Status:   status,
-				Cluster:  cluster,
+				RunID:      rid,
+				Template:   tmpl,
+				Prefix:     pfx,
+				Seed:       seed,
+				DryRun:     false,
+				Started:    started,
+				Finished:   fin,
+				Status:     status,
+				Cluster:    cluster,
+				SnapshotID: snapID,
 			})
 		}
 	}()
@@ -364,6 +386,14 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 	}
 	run.setStep("precheck", stepPassed, fmt.Sprintf("%s · ok", run.Prefix))
 
+	if cl != nil {
+		if h, err := cl.ClusterHealth(ctx, g.RunID); err == nil {
+			openHealth = h
+			run.appendLog("info", "OPEN", 0, fmt.Sprintf("health snapshot nodes Ready %d/%d OVN %d/%d",
+				h.NodesReady, h.NodesReady+h.NodesNotReady, h.OVNReady, h.OVNPods))
+		}
+	}
+
 	opts := runner.Options{
 		Cluster:      cl,
 		Config:       cfg,
@@ -390,6 +420,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 	}
 
 	rep, err := runner.Run(ctx, opts)
+	lastRep = rep
 	if err != nil {
 		run.fail("", err.Error())
 		if rep != nil {
@@ -403,9 +434,6 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 	run.mu.Lock()
 	run.Convergence = rep.Convergence
 	run.Status = "passed"
-	if !dryRun {
-		run.ReportURL = "/report"
-	}
 	run.mu.Unlock()
 	doneMsg := "complete"
 	if !dryRun {

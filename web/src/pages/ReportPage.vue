@@ -5,48 +5,269 @@
         <div class="dasm-caps">Narrative</div>
         <h1 class="dasm-title">OVN / API report</h1>
         <p class="dasm-subtitle">
-          Merges cluster health with kube-burner collected metrics from the last apply.
+          Immutable end-of-run snapshots. Cleanup does not rewrite history — pick a run below.
         </p>
       </div>
     </div>
 
-    <q-btn class="q-mb-md" flat dense color="primary" icon="refresh" label="Reload" :loading="loading" @click="load" />
-    <div v-if="error" class="dasm-panel q-mb-md text-negative">{{ error }}</div>
-
-    <div class="dasm-panel q-mb-lg" style="white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.88rem;">
-      {{ doc.narrative || 'No report yet. Run apply --measure then dasm-burner report.' }}
+    <div class="row items-center q-gutter-sm q-mb-md">
+      <q-btn flat dense color="primary" icon="refresh" label="Reload" :loading="loading" @click="load" />
+      <q-chip v-if="selected?.immutable" dense square color="positive" text-color="white" icon="lock">
+        immutable
+      </q-chip>
+      <span v-if="list.length" class="text-caption text-grey-7">{{ list.length }} snapshot(s)</span>
     </div>
 
-    <div v-if="metrics.length" class="dasm-grid dasm-grid--2">
-      <div class="dasm-panel" v-for="m in metrics" :key="m.metric">
-        <div class="dasm-stat-label">{{ m.metric }}</div>
-        <div class="dasm-stat">{{ Number(m.last || 0).toPrecision(4) }}</div>
-        <div class="text-caption text-grey-7">max {{ Number(m.max || 0).toPrecision(4) }} · n={{ m.count }}</div>
+    <div v-if="error" class="dasm-panel q-mb-md text-negative">{{ error }}</div>
+
+    <div class="row q-col-gutter-md">
+      <div class="col-12 col-md-4">
+        <div class="dasm-panel">
+          <div class="dasm-stat-label q-mb-sm">Snapshots</div>
+          <div v-if="!list.length" class="text-caption text-grey-7">
+            No snapshots yet. Finish an Execute run to freeze one.
+          </div>
+          <div class="snap-list">
+            <button
+              v-for="r in list"
+              :key="r.snapshotId"
+              type="button"
+              class="snap-row"
+              :class="{ 'is-active': r.snapshotId === selectedId }"
+              @click="select(r.snapshotId)"
+            >
+              <div class="snap-title">
+                <span class="text-mono">{{ r.prefix || `kb-${r.runId}` }}</span>
+                <q-badge v-if="r.dryRun" outline color="grey">dry-run</q-badge>
+                <q-badge :color="statusColor(r.status)" text-color="white">{{ r.status || '—' }}</q-badge>
+              </div>
+              <div class="snap-meta">
+                {{ fmt(r.finished || r.generatedAt) }}
+                <span v-if="r.template"> · {{ r.template }}</span>
+              </div>
+              <div class="snap-close text-caption">{{ r.closeHeadline || r.openHeadline }}</div>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-md-8">
+        <div v-if="!selected" class="dasm-panel text-caption text-grey-7">
+          Select a snapshot to view Open / Close summaries.
+        </div>
+        <template v-else>
+          <div class="dasm-panel q-mb-md">
+            <div class="row items-start justify-between">
+              <div>
+                <div class="dasm-stat-label">Snapshot</div>
+                <div class="text-mono text-weight-bold">{{ selected.snapshotId }}</div>
+                <div class="text-caption text-grey-7 q-mt-xs">
+                  run <span class="text-mono">{{ selected.runId }}</span>
+                  <span v-if="selected.prefix"> · {{ selected.prefix }}</span>
+                  <span v-if="selected.cluster"> · {{ selected.cluster }}</span>
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="dasm-stat" v-if="conv != null">{{ Number(conv).toFixed(1) }}%</div>
+                <div class="dasm-stat-label">convergence</div>
+              </div>
+            </div>
+          </div>
+
+          <q-expansion-item
+            class="dasm-panel q-mb-md box-exp"
+            expand-separator
+            default-opened
+            icon="play_circle"
+            :label="selected.open?.title || 'Open'"
+            :caption="selected.open?.headline"
+          >
+            <div class="q-pa-md">
+              <ul class="box-list">
+                <li v-for="(h, i) in (selected.open?.highlights || [])" :key="'o'+i">{{ h }}</li>
+              </ul>
+              <div v-if="selected.open?.health" class="text-caption text-grey-7 q-mt-sm">
+                Sampled {{ fmt(selected.open.at || selected.open.health.sampledAt) }}
+              </div>
+            </div>
+          </q-expansion-item>
+
+          <q-expansion-item
+            class="dasm-panel q-mb-md box-exp"
+            expand-separator
+            default-opened
+            icon="stop_circle"
+            :label="selected.close?.title || 'Close'"
+            :caption="selected.close?.headline"
+          >
+            <div class="q-pa-md">
+              <ul class="box-list">
+                <li v-for="(h, i) in (selected.close?.highlights || [])" :key="'c'+i">{{ h }}</li>
+              </ul>
+              <div v-if="selected.close?.convergence" class="text-caption q-mt-sm">
+                Convergence overall
+                <strong>{{ Number(selected.close.convergence.overallPercent || selected.close.convergence.overall || 0).toFixed(1) }}%</strong>
+              </div>
+              <div v-if="selected.close?.health" class="text-caption text-grey-7 q-mt-sm">
+                Sampled {{ fmt(selected.close.at || selected.close.health.sampledAt) }}
+              </div>
+            </div>
+          </q-expansion-item>
+
+          <q-expansion-item
+            class="dasm-panel q-mb-md box-exp"
+            expand-separator
+            icon="article"
+            label="Narrative"
+            caption="Full frozen markdown"
+          >
+            <div class="q-pa-md narrative">{{ selected.narrative }}</div>
+          </q-expansion-item>
+
+          <div v-if="metrics.length" class="dasm-grid dasm-grid--2">
+            <div class="dasm-panel" v-for="m in metrics" :key="m.metric">
+              <div class="dasm-stat-label">{{ m.metric }}</div>
+              <div class="dasm-stat">{{ Number(m.last || 0).toPrecision(4) }}</div>
+              <div class="text-caption text-grey-7">max {{ Number(m.max || 0).toPrecision(4) }} · n={{ m.count }}</div>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
   </q-page>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { getReport } from 'src/services/api'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { getReport, getReportById, listReports } from 'src/services/api'
+
+const route = useRoute()
+const router = useRouter()
 
 const loading = ref(false)
 const error = ref('')
-const doc = ref({})
-const metrics = computed(() => Object.values(doc.value.metrics || {}))
+const list = ref([])
+const selectedId = ref('')
+const selected = ref(null)
+
+const metrics = computed(() => Object.values(selected.value?.metrics || {}))
+const conv = computed(() => {
+  const c = selected.value?.close?.convergence || selected.value?.apply?.convergence
+  if (!c) return null
+  if (c.overallPercent != null) return c.overallPercent
+  return c.overall
+})
+
+function statusColor(st) {
+  switch (st) {
+    case 'passed': return 'positive'
+    case 'failed':
+    case 'aborted': return 'negative'
+    default: return 'grey-6'
+  }
+}
+
+function fmt(at) {
+  try {
+    return at ? new Date(at).toLocaleString() : ''
+  } catch {
+    return ''
+  }
+}
+
+async function select(id) {
+  if (!id) return
+  selectedId.value = id
+  error.value = ''
+  try {
+    selected.value = await getReportById(id)
+    if (route.query.id !== id) {
+      router.replace({ name: 'report', query: { id } })
+    }
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message || 'failed to load snapshot'
+  }
+}
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    doc.value = await getReport()
+    const data = await listReports()
+    list.value = data.reports || []
+    const want = route.query.id || list.value[0]?.snapshotId
+    if (want) {
+      await select(want)
+    } else {
+      selected.value = await getReport().catch(() => null)
+      if (selected.value?.snapshotId) {
+        selectedId.value = selected.value.snapshotId
+      }
+    }
   } catch (e) {
-    error.value = e.response?.data?.error || e.message || 'failed to load report'
+    error.value = e.response?.data?.error || e.message || 'failed to load reports'
   } finally {
     loading.value = false
   }
 }
 
+watch(() => route.query.id, (id) => {
+  if (id && id !== selectedId.value) select(id)
+})
+
 onMounted(load)
 </script>
+
+<style scoped>
+.snap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 70vh;
+  overflow: auto;
+}
+.snap-row {
+  text-align: left;
+  border: 1px solid var(--dasm-border-soft);
+  background: #f4f7fa;
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.snap-row:hover { border-color: #2f8f7d; }
+.snap-row.is-active {
+  background: #e8f5f1;
+  border-color: #2f8f7d;
+}
+.snap-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  font-weight: 700;
+  color: #1d2b36;
+}
+.snap-meta { font-size: 0.78rem; color: #607483; margin-top: 0.15rem; }
+.snap-close { color: #4a6575; margin-top: 0.2rem; }
+.text-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.box-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #1d2b36;
+}
+.box-list li { margin-bottom: 0.25rem; }
+.narrative {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.box-exp {
+  padding: 0;
+  overflow: hidden;
+}
+</style>

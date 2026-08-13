@@ -47,10 +47,11 @@ func Default() *Config {
 			},
 		},
 		Application: Application{
-			Image:               DefaultWebImage,
-			ImagePullPolicy:     "IfNotPresent",
-			ImagePullSecret:     "dasmlab-ghcr-pull",
-			ImagePullSecretFrom: "mock-me-system",
+			Image:           DefaultWebImage,
+			ImagePullPolicy: "IfNotPresent",
+			// Public GHCR — no pull secret required for workload pods.
+			ImagePullSecret:     "",
+			ImagePullSecretFrom: "",
 			Port:                DefaultPort,
 			Response: ResponseSpec{
 				Type: "podName",
@@ -146,11 +147,11 @@ func ApplyDefaults(c *Config) {
 	if c.Application.ImagePullPolicy == "" {
 		c.Application.ImagePullPolicy = d.Application.ImagePullPolicy
 	}
-	if c.Application.ImagePullSecret == "" {
-		c.Application.ImagePullSecret = d.Application.ImagePullSecret
-	}
-	if c.Application.ImagePullSecretFrom == "" {
-		c.Application.ImagePullSecretFrom = d.Application.ImagePullSecretFrom
+	// Legacy private-GHCR templates: strip pull-secret so public images work without
+	// copying dasmlab-ghcr-pull from mock-me-system.
+	if c.Application.ImagePullSecret == "dasmlab-ghcr-pull" {
+		c.Application.ImagePullSecret = ""
+		c.Application.ImagePullSecretFrom = ""
 	}
 	if c.Application.Port == 0 {
 		c.Application.Port = d.Application.Port

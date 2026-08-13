@@ -10,15 +10,16 @@ import (
 )
 
 type runHistoryEntry struct {
-	RunID    string    `json:"runId"`
-	Template string    `json:"template"`
-	Prefix   string    `json:"prefix"`
-	Seed     int64     `json:"seed"`
-	DryRun   bool      `json:"dryRun"`
-	Started  time.Time `json:"started"`
-	Finished time.Time `json:"finished,omitempty"`
-	Status   string    `json:"status"`
-	Cluster  string    `json:"cluster,omitempty"`
+	RunID      string    `json:"runId"`
+	Template   string    `json:"template"`
+	Prefix     string    `json:"prefix"`
+	Seed       int64     `json:"seed"`
+	DryRun     bool      `json:"dryRun"`
+	Started    time.Time `json:"started"`
+	Finished   time.Time `json:"finished,omitempty"`
+	Status     string    `json:"status"`
+	Cluster    string    `json:"cluster,omitempty"`
+	SnapshotID string    `json:"snapshotId,omitempty"`
 }
 
 type runHistory struct {

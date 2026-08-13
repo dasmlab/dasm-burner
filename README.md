@@ -35,7 +35,8 @@ Default intended mix (`config/route-service-density.yaml`):
 
 Each namespace is two 1:1 route→service pairs, three replicas behind each Deployment. Names look like `kb-7f3a-ns-00001-x4k9`. Same `naming.seed` reproduces the same names.
 
-The pod image is a tiny `net/http` server (`cmd/webserver`) that returns `POD_NAME` on `/` and `ok` on `/healthz` and `/readyz`. Publish it as `ghcr.io/dasmlab/dasm-burner-web:dev`. Apply copies the `dasmlab-ghcr-pull` secret from `mock-me-system` into each workload namespace.
+Apply copies no pull secret by default (`ghcr.io/dasmlab/dasm-burner-web` is public).
+Optionally set `application.imagePullSecret` / `imagePullSecretFrom` if you point at a private image.
 
 Phase 2 still owns apply. Phase 3 renders kube-burner YAML and shells out to the pinned **kube-burner v2.8.1** binary (`make kube-burner` → `./bin/kube-burner`):
 

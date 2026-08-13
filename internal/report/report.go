@@ -14,9 +14,23 @@ import (
 )
 
 // Document is the Phase 4 product: apply + kube-burner collected + OVN/node health.
+// When Immutable is true, Health/Open/Close were frozen at end of run and must not
+// be refreshed from the live cluster (cleanup would otherwise rewrite history).
 type Document struct {
 	GeneratedAt time.Time          `json:"generatedAt"`
+	SnapshotID  string             `json:"snapshotId,omitempty"`
+	Immutable   bool               `json:"immutable,omitempty"`
 	RunID       string             `json:"runId,omitempty"`
+	Prefix      string             `json:"prefix,omitempty"`
+	Template    string             `json:"template,omitempty"`
+	Cluster     string             `json:"cluster,omitempty"`
+	Status      string             `json:"status,omitempty"`
+	DryRun      bool               `json:"dryRun,omitempty"`
+	Started     time.Time          `json:"started,omitempty"`
+	Finished    time.Time          `json:"finished,omitempty"`
+	Desired     DesiredCounts      `json:"desired,omitempty"`
+	Open        SummaryBox         `json:"open,omitempty"`
+	Close       SummaryBox         `json:"close,omitempty"`
 	Health      kube.Health        `json:"health"`
 	Apply       *runner.Report     `json:"apply,omitempty"`
 	Metrics     map[string]Summary `json:"metrics,omitempty"`
@@ -147,12 +161,41 @@ func asFloat(v any) (float64, bool) {
 func narrative(doc *Document) string {
 	var b strings.Builder
 	b.WriteString("# dasm-burner report\n\n")
-	b.WriteString(fmt.Sprintf("Generated %s\n\n", doc.GeneratedAt.Format(time.RFC3339)))
+	b.WriteString(fmt.Sprintf("Generated %s", doc.GeneratedAt.Format(time.RFC3339)))
+	if doc.Immutable {
+		b.WriteString(" (immutable snapshot)")
+	}
+	b.WriteString("\n\n")
+	if doc.SnapshotID != "" {
+		b.WriteString(fmt.Sprintf("Snapshot `%s`.\n", doc.SnapshotID))
+	}
 	if doc.RunID != "" {
-		b.WriteString(fmt.Sprintf("Run `%s`. ", doc.RunID))
+		b.WriteString(fmt.Sprintf("Run `%s`", doc.RunID))
+		if doc.Prefix != "" {
+			b.WriteString(fmt.Sprintf(" · prefix `%s`", doc.Prefix))
+		}
+		b.WriteString(".\n")
+	}
+	if doc.Template != "" || doc.Cluster != "" {
+		b.WriteString(fmt.Sprintf("Template `%s` · cluster `%s` · status `%s`.\n\n",
+			orDash(doc.Template), orDash(doc.Cluster), orDash(doc.Status)))
+	}
+	if doc.Open.Headline != "" {
+		b.WriteString("## Open\n\n" + doc.Open.Headline + "\n")
+		for _, h := range doc.Open.Highlights {
+			b.WriteString("- " + h + "\n")
+		}
+		b.WriteString("\n")
+	}
+	if doc.Close.Headline != "" {
+		b.WriteString("## Close\n\n" + doc.Close.Headline + "\n")
+		for _, h := range doc.Close.Highlights {
+			b.WriteString("- " + h + "\n")
+		}
+		b.WriteString("\n")
 	}
 	h := doc.Health
-	b.WriteString(fmt.Sprintf("Nodes Ready %d / not Ready %d. OVN pods Ready %d/%d (restarts %d). Managed pods Ready %d/%d. OOMKilled %d. Warning events %d.\n\n",
+	b.WriteString(fmt.Sprintf("## Cluster health (frozen)\n\nNodes Ready %d / not Ready %d. OVN pods Ready %d/%d (restarts %d). Managed pods Ready %d/%d. OOMKilled %d. Warning events %d.\n\n",
 		h.NodesReady, h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts, h.ManagedReady, h.ManagedPods, h.OOMKilled, h.WarningEvents))
 	if doc.Apply != nil {
 		b.WriteString(fmt.Sprintf("Apply mode %s duration %s convergence %.1f%% aborted=%v.\n",

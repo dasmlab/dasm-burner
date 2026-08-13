@@ -60,7 +60,7 @@
           <q-item-section avatar><q-icon name="summarize" /></q-item-section>
           <q-item-section>
             <q-item-label>Report</q-item-label>
-            <q-item-label caption>last apply + Prometheus</q-item-label>
+            <q-item-label caption>immutable snapshots</q-item-label>
           </q-item-section>
         </q-item>
       </q-list>
@@ -114,49 +114,41 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { addClusterLogin, getCluster, getVersion, selectCluster } from 'src/services/api'
+import { addClusterLogin, getVersion } from 'src/services/api'
 import { useAuth } from 'src/services/auth'
+import { useCluster } from 'src/services/cluster'
 
 const auth = useAuth()
+const cluster = useCluster()
 const leftDrawerOpen = ref(false)
 const versionLabel = ref('…')
 const year = new Date().getFullYear()
-const clusters = ref([])
-const clusterName = ref('')
 const addOpen = ref(false)
 const paste = ref('')
 const customName = ref('')
 const adding = ref(false)
 const addError = ref('')
 
+const clusterName = computed({
+  get: () => cluster.currentName.value,
+  set: () => {},
+})
+
 const clusterOptions = computed(() =>
-  clusters.value.map((c) => ({
+  cluster.clusters.value.map((c) => ({
     label: c.source === 'login-command' ? `${c.name} (token)` : c.name,
     value: c.name,
     caption: c.server || c.source,
   })),
 )
 
-async function loadCluster() {
-  try {
-    const data = await getCluster()
-    clusters.value = data.clusters || []
-    clusterName.value = data.current?.name || ''
-  } catch {
-    clusters.value = []
-  }
-}
-
 async function onClusterChange(name) {
-  const c = clusters.value.find((x) => x.name === name)
-  if (!c) return
-  await selectCluster({
-    name: c.name,
-    kubeconfig: c.kubeconfig,
-    context: c.context,
-    source: c.source,
-  })
-  await loadCluster()
+  if (!name || name === cluster.currentName.value) return
+  try {
+    await cluster.select(name)
+  } catch (e) {
+    addError.value = e.response?.data?.error || e.message
+  }
 }
 
 function resetAdd() {
@@ -169,12 +161,11 @@ async function submitAdd() {
   adding.value = true
   addError.value = ''
   try {
-    const data = await addClusterLogin({
+    await addClusterLogin({
       paste: paste.value,
       name: customName.value || undefined,
     })
-    clusters.value = data.clusters || []
-    clusterName.value = data.current?.name || data.added?.name || ''
+    await cluster.refresh()
     addOpen.value = false
     resetAdd()
   } catch (e) {
@@ -186,7 +177,7 @@ async function submitAdd() {
 
 onMounted(async () => {
   await auth.init()
-  await loadCluster()
+  await cluster.refresh()
   try {
     const v = await getVersion()
     versionLabel.value = v.version || 'dev'

@@ -93,8 +93,6 @@ spec:
         app: dasm-burner
     spec:
       serviceAccountName: dasm-burner-sa
-      imagePullSecrets:
-        - name: dasmlab-ghcr-pull
       containers:
         - name: dasm-burner
           image: ghcr.io/dasmlab/dasm-burner:__VERSION__

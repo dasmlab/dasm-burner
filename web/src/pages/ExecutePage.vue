@@ -61,7 +61,7 @@
       <div class="col-12 col-md-3">
         <div class="dasm-panel column q-gutter-sm">
           <div class="dasm-stat-label">Cluster</div>
-          <div class="text-body2">{{ clusterLabel }}</div>
+          <div class="text-body2">{{ cluster.currentLabel.value }}</div>
           <q-btn
             color="primary"
             unelevated
@@ -102,7 +102,7 @@
             unelevated
             icon="assessment"
             label="Open report"
-            :to="{ name: 'report' }"
+            :to="reportRoute"
           />
         </div>
       </div>
@@ -211,14 +211,15 @@ import {
   cancelRun,
   clearRunLog,
   getCleanupStatus,
-  getCluster,
   getRun,
   listTemplates,
   postCleanup,
   selectTemplate,
   startRun,
 } from 'src/services/api'
+import { useCluster } from 'src/services/cluster'
 
+const cluster = useCluster()
 const error = ref('')
 const cleanupMsg = ref('')
 const templates = ref([])
@@ -230,7 +231,6 @@ const skipBaseline = ref(true)
 const starting = ref(false)
 const cleaning = ref(false)
 const run = ref(null)
-const clusterLabel = ref('…')
 const logEl = ref(null)
 const deploy = ref(null)
 const managedTotal = ref(null)
@@ -250,8 +250,14 @@ const running = computed(() => runStatus.value === 'running')
 const runPrefix = computed(() => run.value?.prefix || '')
 const runPattern = computed(() => run.value?.namePattern || '')
 const showReportLink = computed(() =>
-  Boolean(run.value?.reportUrl) && runStatus.value === 'passed' && !run.value?.dryRun,
+  Boolean(run.value?.snapshotId || run.value?.reportUrl) &&
+  (runStatus.value === 'passed' || runStatus.value === 'failed'),
 )
+const reportRoute = computed(() => {
+  const q = {}
+  if (run.value?.snapshotId) q.id = run.value.snapshotId
+  return { name: 'report', query: q }
+})
 const deployOnline = computed(() => Boolean(deploy.value?.deployed))
 const deployPrefix = computed(() => deploy.value?.prefix || '')
 const deployLabel = computed(() => {
@@ -400,8 +406,7 @@ watch(templateName, () => {
 onMounted(async () => {
   try {
     await refreshTemplates()
-    const c = await getCluster()
-    clusterLabel.value = c.current?.name || 'unknown'
+    if (!cluster.ready.value) await cluster.refresh()
     await poll()
     await refreshDeploy()
   } catch (e) {
