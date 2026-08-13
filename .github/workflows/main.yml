@@ -171,13 +171,14 @@ jobs:
       - name: Ensure HAProxy CERT for prod FQDN
         if: success() && needs.prepare.outputs.is_prod == 'true'
         continue-on-error: true
+        env:
+          PREVIEW_PROXY_SSH_KEY: ${{ secrets.PREVIEW_PROXY_SSH_KEY }}
+          PREVIEW_PROXY_HOST: "10.20.1.10"
+          PREVIEW_PROXY_USER: "dasm"
         run: |
           set -euo pipefail
           FQDN="dasm-burner.apps.2026-prod-1.ocp.dasmlab.org"
-          if ! command -v ssh >/dev/null 2>&1; then
-            echo "WARN: ssh not on runner — skip HAProxy CERT ensure"
-            exit 0
-          fi
+          chmod +x scripts/ci/*.sh
           bash scripts/ci/ensure-prod-cert.sh "${FQDN}"
 
   gitops-deploy:
@@ -243,6 +244,9 @@ jobs:
     runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
       - name: GitOps preview (previews/{owner}.yaml)
         env:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
@@ -250,8 +254,14 @@ jobs:
           PREVIEW_FRESH: ${{ needs.prepare.outputs.fresh_preview }}
           DASMLAB_GHCR_PAT: ${{ secrets.DASMLAB_GHCR_PAT }}
           PREVIEW_PROXY_SSH_KEY: ${{ secrets.PREVIEW_PROXY_SSH_KEY }}
+          PREVIEW_PROXY_HOST: "10.20.1.10"
+          PREVIEW_PROXY_USER: "dasm"
         run: |
           set -euo pipefail
+          if [ -z "${PREVIEW_PROXY_SSH_KEY}" ]; then
+            echo "ERROR: secret PREVIEW_PROXY_SSH_KEY is not set"
+            exit 1
+          fi
           if [ -f /home/dasm/gh_token ]; then
             :
           elif [ -z "${DASMLAB_GHCR_PAT}" ] && [ -f /home/dasm/gh-pat ]; then
