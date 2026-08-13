@@ -12,6 +12,7 @@ import (
 	"github.com/dasmlab/dasm-burner/internal/auth"
 	"github.com/dasmlab/dasm-burner/internal/config"
 	"github.com/dasmlab/dasm-burner/internal/kube"
+	"github.com/dasmlab/dasm-burner/internal/ovndiag"
 	"github.com/dasmlab/dasm-burner/internal/runner"
 	"github.com/dasmlab/dasm-burner/internal/topology"
 )
@@ -29,6 +30,7 @@ type Server struct {
 	activeTemplate string
 	exec           *execManager
 	cleanupBusy    bool
+	ovnBase        *ovndiag.Baseline
 }
 
 func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *auth.Service) *Server {
@@ -75,6 +77,9 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/cleanup-reports", s.protect(s.cleanupReportsAPI))
 	s.Mux.Handle("/api/v1/cleanup-reports/", s.protect(s.cleanupReportByID))
 	s.Mux.Handle("/api/v1/kube-burner-preview", s.protect(s.kubeBurnerPreview))
+	s.Mux.Handle("/api/v1/ovndiag", s.protect(s.ovndiagAPI))
+	s.Mux.Handle("/api/v1/ovndiag/baseline", s.protect(s.ovndiagBaselineAPI))
+	s.Mux.Handle("/api/v1/ovndiag/sample", s.protect(s.ovndiagSample))
 	s.Mux.HandleFunc("/", s.spa)
 	return s
 }

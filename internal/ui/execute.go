@@ -14,6 +14,7 @@ import (
 	"github.com/dasmlab/dasm-burner/internal/burner"
 	"github.com/dasmlab/dasm-burner/internal/config"
 	"github.com/dasmlab/dasm-burner/internal/kube"
+	"github.com/dasmlab/dasm-burner/internal/ovndiag"
 	"github.com/dasmlab/dasm-burner/internal/runner"
 	"github.com/dasmlab/dasm-burner/internal/topology"
 )
@@ -413,6 +414,17 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			openHealth = h
 			run.appendLog("info", "OPEN", 0, fmt.Sprintf("health snapshot nodes Ready %d/%d OVN %d/%d restarts=%d",
 				h.NodesReady, h.NodesReady+h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts))
+		}
+		if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil {
+			if snap, err := ovndiag.Sample(ctx, live.Clientset(), nil, g.RunID, run.Cluster, 0); err == nil {
+				s.ovnBaseline().Capture(snap.Nodes)
+				snap.BaselineAt = s.ovnBaseline().At()
+				if id, werr := ovndiag.WriteSnapshot(s.RunDir, snap); werr == nil {
+					run.appendLog("info", "OVNDIAG", 0, "baseline captured · snapshot "+id)
+				}
+			} else {
+				run.appendLog("warn", "OVNDIAG", 0, "baseline sample: "+err.Error())
+			}
 		}
 	}
 

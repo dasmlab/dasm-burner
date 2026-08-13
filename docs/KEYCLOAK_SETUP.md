@@ -29,6 +29,7 @@ Admin console: https://keycloak.apps.2026-prod-1.ocp.dasmlab.org/admin
 | Home URL | `https://dasm-burner.apps.2026-prod-1.ocp.dasmlab.org/` |
 | Valid redirect URIs | `https://dasm-burner.apps.2026-prod-1.ocp.dasmlab.org/api/v1/auth/callback` |
 | | `https://dasm-burner.apps.2026-prod-1.ocp.dasmlab.org/*` |
+| | `https://dev-*-dasm-burner.apps.2026-prod-1.ocp.dasmlab.org/api/v1/auth/callback` (Keycloak may **not** honor `*` in subdomain — prefer explicit hosts) |
 | | `http://localhost:8080/api/v1/auth/callback` |
 | | `http://localhost:8080/*` |
 | Valid post logout redirect URIs | `https://dasm-burner.apps.2026-prod-1.ocp.dasmlab.org/*` |
@@ -94,3 +95,18 @@ oc get cm mock-me-oidc-ca -n mock-me-system -o yaml \
   | sed 's/namespace: mock-me-system/namespace: dasm-burner-system/; s/name: mock-me-oidc-ca/name: dasm-burner-oidc-ca/' \
   | oc apply -f -
 ```
+
+## Preview / development hosts
+
+Same model as mock-me and dasmlab-home ([docs/DEVELOPER.md](DEVELOPER.md)):
+
+| Item | Example (`owner=lmcdasm`) |
+|------|---------------------------|
+| Host | `https://dev-lmcdasm-dasm-burner.apps.2026-prod-1.ocp.dasmlab.org` |
+| Redirect | `…/api/v1/auth/callback` |
+| Namespace | `dasm-burner-dev-lmcdasm` |
+| Client | still `dasm-burner` (same confidential client) |
+
+Keycloak **does not** reliably support subdomain wildcards. CI runs `scripts/ci/ensure-keycloak-preview-uris.sh` (from dasmlab-home) to append each preview origin. Manual fallback: add the two redirect URIs + web origin for your `dev-{you}-dasm-burner…` host in the admin console.
+
+Edge TLS: `scripts/ci/ensure-preview-cert.sh` appends `CERTn=` on HAProxy `10.20.1.10` (same as mock-me).

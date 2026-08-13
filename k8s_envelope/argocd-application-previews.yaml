@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dasm-burner-previews
+  namespace: openshift-gitops
+  labels:
+    app.kubernetes.io/part-of: dasm-burner
+    dasmlab.org/cluster: 2026-prod-1
+    dasm-burner.dasmlab.org/previews: "true"
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:lmcdasm/dasmlab-live-cicd.git
+    targetRevision: main
+    path: clusters/2026-prod-1/dasm-burner/previews
+    directory:
+      recurse: false
+      include: "*.yaml"
+  destination:
+    # Each preview manifest sets its own namespace (dasm-burner-dev-*).
+    server: https://kubernetes.default.svc
+    namespace: dasm-burner-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true

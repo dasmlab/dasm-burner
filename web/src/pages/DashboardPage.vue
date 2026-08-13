@@ -79,6 +79,58 @@
       </div>
     </div>
 
+    <div class="row items-center justify-between q-mb-sm q-mt-lg">
+      <div class="text-subtitle1 text-weight-medium">OVN-Kube Diagnoser</div>
+      <div class="row q-gutter-sm">
+        <q-btn outline dense color="primary" label="Capture baseline" :loading="ovnBusy" @click="captureOVNBaseline" />
+        <q-btn flat dense color="primary" icon="refresh" label="Sample" :loading="ovnBusy" @click="sampleOVN" />
+      </div>
+    </div>
+    <p class="text-caption text-grey-7 q-mb-md">
+      Active interrogation of node + ovnkube-node health (not kube-burner metrics).
+      Baseline first, then sample during / after Execute to see restart Δ and findings.
+    </p>
+    <div v-if="ovnError" class="dasm-panel q-mb-md text-negative">{{ ovnError }}</div>
+    <div v-if="ovnSnap" class="dasm-panel q-mb-lg">
+      <div class="row items-center q-gutter-md q-mb-md">
+        <q-badge :color="ovnStateColor" text-color="white">{{ ovnSnap.overallState || '—' }}</q-badge>
+        <span class="text-caption">
+          {{ ovnSnap.healthyCount ?? 0 }} healthy · {{ ovnSnap.warningCount ?? 0 }} warning · {{ ovnSnap.criticalCount ?? 0 }} critical
+        </span>
+        <span v-if="ovnSnap.baselineAt" class="text-caption text-grey-7">baseline {{ fmtTime(ovnSnap.baselineAt) }}</span>
+      </div>
+      <div v-if="ovnSnap.why" class="text-body2 q-mb-md"><strong>Why?</strong> {{ ovnSnap.why }}</div>
+      <table class="ovn-diag-table">
+        <thead>
+          <tr>
+            <th>Node</th>
+            <th>State</th>
+            <th>Ready</th>
+            <th>OVN pod</th>
+            <th>Restarts Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="n in (ovnSnap.nodes || [])" :key="n.nodeName" :class="{ 'is-hot': n.overallState !== 'HEALTHY' }">
+            <td class="text-mono">{{ n.nodeName }}</td>
+            <td>{{ n.overallState }}</td>
+            <td>{{ n.node?.ready ? 'yes' : 'no' }}</td>
+            <td class="text-mono">{{ n.ovnKube?.podName || '—' }}</td>
+            <td><strong>{{ n.ovnKube?.restartsDelta ?? 0 }}</strong> / {{ n.ovnKube?.restarts ?? 0 }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-if="ovnSnap.timeline?.length" class="q-mt-md">
+        <div class="dasm-stat-label q-mb-xs">Timeline</div>
+        <ul class="ovn-tl">
+          <li v-for="(t, i) in ovnSnap.timeline.slice(0, 12)" :key="i">
+            <span class="text-mono">{{ fmtTime(t.at) }}</span> · {{ t.summary }}
+            <span v-if="t.node" class="text-grey-7"> ({{ t.node }})</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
     <div class="text-subtitle1 text-weight-medium q-mb-sm">Mixes on this cluster</div>
     <p class="text-caption text-grey-7 q-mb-md">
       Intended = saved templates ready to run. Live = managed namespaces currently on
@@ -175,7 +227,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { clearHealthBaseline, getOverview } from 'src/services/api'
+import { clearHealthBaseline, getOverview, getOVNDiag, sampleOVNDiag, baselineOVNDiag } from 'src/services/api'
 import { useCluster } from 'src/services/cluster'
 
 const cluster = useCluster()
@@ -184,6 +236,9 @@ const clearing = ref(false)
 const error = ref('')
 const notice = ref('')
 const overview = ref(null)
+const ovnSnap = ref(null)
+const ovnBusy = ref(false)
+const ovnError = ref('')
 let timer = null
 
 const health = computed(() => overview.value?.health || {})
@@ -210,6 +265,16 @@ const gateClass = computed(() => {
   if (lvl === 'WARNING') return 'is-warn'
   return 'is-ok'
 })
+const ovnStateColor = computed(() => {
+  switch (ovnSnap.value?.overallState) {
+    case 'HEALTHY': return 'positive'
+    case 'WARNING':
+    case 'DEGRADED': return 'warning'
+    case 'CRITICAL':
+    case 'FAILED': return 'negative'
+    default: return 'grey-6'
+  }
+})
 
 function fmtTime(at) {
   try {
@@ -219,12 +284,40 @@ function fmtTime(at) {
   }
 }
 
+async function sampleOVN() {
+  ovnBusy.value = true
+  ovnError.value = ''
+  try {
+    const data = await sampleOVNDiag({})
+    ovnSnap.value = data.snapshot
+  } catch (e) {
+    ovnError.value = e.response?.data?.error || e.message
+  } finally {
+    ovnBusy.value = false
+  }
+}
+
+async function captureOVNBaseline() {
+  ovnBusy.value = true
+  ovnError.value = ''
+  try {
+    const data = await baselineOVNDiag()
+    ovnSnap.value = data.snapshot
+    notice.value = 'OVN diagnoser baseline captured.'
+  } catch (e) {
+    ovnError.value = e.response?.data?.error || e.message
+  } finally {
+    ovnBusy.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
     if (!cluster.ready.value) await cluster.refresh()
     overview.value = await getOverview()
+    getOVNDiag().then((d) => { ovnSnap.value = d.snapshot }).catch(() => {})
   } catch (e) {
     error.value = e.response?.data?.error || e.message || 'failed to load'
   } finally {
@@ -380,6 +473,23 @@ onUnmounted(() => {
 }
 .text-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.ovn-diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.ovn-diag-table th,
+.ovn-diag-table td {
+  text-align: left;
+  padding: 0.35rem 0.45rem;
+  border-bottom: 1px solid #d9e2ea;
+}
+.ovn-diag-table tr.is-hot td { background: #fff4f0; }
+.ovn-tl {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
 }
 
 @media (max-width: 700px) {

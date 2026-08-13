@@ -1,20 +1,50 @@
 name: dasm-burner CX Pipeline
 
+# Dual-env (same as mock-me / interview-me / dasmlab-home):
+#   main          → clusters/.../dasm-burner/live/          (prod)
+#   any other ref → clusters/.../dasm-burner/previews/{owner}.yaml
+# There is NO live-cicd "development/" overlay path.
+
 on:
   push:
-    branches: ["main", "development"]
+    branches: ["**"]
   workflow_dispatch:
+    inputs:
+      fresh_preview:
+        description: "Wipe preview data PVC before deploy (branch previews only)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dasm-burner-${{ github.ref == 'refs/heads/main' && 'prod' || format('preview-{0}', github.actor) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   prepare:
     runs-on: [self-hosted]
     outputs:
       version_tag: ${{ steps.meta.outputs.version_tag }}
+      is_prod: ${{ steps.meta.outputs.is_prod }}
+      fresh_preview: ${{ steps.meta.outputs.fresh_preview }}
     steps:
       - uses: actions/checkout@v4
       - id: meta
         run: |
+          set -euo pipefail
           echo "version_tag=v$(date +'%Y.%m.%d')-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "is_prod=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prod=false" >> "$GITHUB_OUTPUT"
+          fi
+          fresh=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.fresh_preview }}" = "true" ]; then
+            fresh=true
+          fi
+          if git log -1 --pretty=%B | grep -qi '\[fresh-preview\]'; then
+            fresh=true
+          fi
+          echo "fresh_preview=${fresh}" >> "$GITHUB_OUTPUT"
 
   build-publish:
     needs: prepare
@@ -75,7 +105,7 @@ jobs:
           exit 1
 
       - name: Ensure HAProxy CERT for prod FQDN
-        if: success()
+        if: success() && needs.prepare.outputs.is_prod == 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -84,19 +114,15 @@ jobs:
             echo "WARN: ssh not on runner — skip HAProxy CERT ensure"
             exit 0
           fi
-          if [ -f scripts/ci/ensure-prod-cert.sh ]; then
-            bash scripts/ci/ensure-prod-cert.sh "${FQDN}"
-          else
-            echo "WARN: ensure-prod-cert.sh missing — add CERTn on 10.20.1.10 manually"
-          fi
+          bash scripts/ci/ensure-prod-cert.sh "${FQDN}"
 
   gitops-deploy:
     needs: [prepare, build-publish]
-    if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development')
+    if: success() && needs.prepare.outputs.is_prod == 'true'
     runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
-      - name: GitOps sync
+      - name: GitOps sync (prod live/)
         env:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
         run: |
@@ -117,6 +143,8 @@ jobs:
           mkdir -p dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications
           cp k8s_envelope/argocd-application.yaml \
             dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications/dasm-burner.yaml
+          cp k8s_envelope/argocd-application-previews.yaml \
+            dasmlab-live-cicd/clusters/2026-prod-1/argocd/applications/dasm-burner-previews.yaml
           for old in "${DEPLOY_DIR}"/dasm-burner-v*.yaml; do
             [ -e "${old}" ] && mv "${old}" "${ARCHIVE_DIR}/"
           done
@@ -131,3 +159,20 @@ jobs:
           fi
           git commit -m "Auto-publish dasm-burner ${VERSION_TAG}"
           git push
+
+  preview-deploy:
+    needs: [prepare, build-publish]
+    if: success() && needs.prepare.outputs.is_prod != 'true'
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: GitOps preview (previews/{owner}.yaml)
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+          PREVIEW_ACTOR: ${{ github.actor }}
+          PREVIEW_FRESH: ${{ needs.prepare.outputs.fresh_preview }}
+          DASMLAB_GHCR_PAT: ${{ secrets.DASMLAB_GHCR_PAT }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci/*.sh
+          bash scripts/ci/deploy-preview.sh

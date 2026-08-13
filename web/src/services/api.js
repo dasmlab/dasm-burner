@@ -43,6 +43,9 @@ export const checkCleanupState = (body) =>
 export const listCleanupReports = () => api.get('/cleanup-reports').then((r) => r.data)
 export const getCleanupReport = (id) =>
   api.get(`/cleanup-reports/${encodeURIComponent(id || 'latest')}`).then((r) => r.data)
+export const getOVNDiag = () => api.get('/ovndiag').then((r) => r.data)
+export const sampleOVNDiag = (body) => api.post('/ovndiag/sample', body || {}).then((r) => r.data)
+export const baselineOVNDiag = () => api.post('/ovndiag/baseline', {}).then((r) => r.data)
 
 export async function getAuthConfig() {
   const { data } = await api.get('/auth/config')

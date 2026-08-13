@@ -1,0 +1,196 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __PREVIEW_NS__
+  labels:
+    app: dasm-burner
+    app.kubernetes.io/name: dasm-burner
+    app.kubernetes.io/component: preview
+    dasm-burner.dasmlab.org/preview-owner: "__PREVIEW_OWNER__"
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dasm-burner-sa
+  namespace: __PREVIEW_NS__
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openshift-gitops-argocd-application-controller
+  namespace: __PREVIEW_NS__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+  - kind: ServiceAccount
+    name: openshift-gitops-argocd-application-controller
+    namespace: openshift-gitops
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: admin
+  namespace: __PREVIEW_NS__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+  - kind: User
+    name: dasm
+
+---
+# ClusterRole dasm-burner-observe is created by prod live/. Bootstrap binds this SA to it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dasm-burner-data
+  namespace: __PREVIEW_NS__
+  labels:
+    app: dasm-burner
+    dasm-burner.dasmlab.org/preview-owner: "__PREVIEW_OWNER__"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dasm-burner
+  namespace: __PREVIEW_NS__
+  labels:
+    app: dasm-burner
+    dasm-burner.dasmlab.org/preview-owner: "__PREVIEW_OWNER__"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dasm-burner
+  template:
+    metadata:
+      labels:
+        app: dasm-burner
+    spec:
+      serviceAccountName: dasm-burner-sa
+      containers:
+        - name: dasm-burner
+          image: ghcr.io/dasmlab/dasm-burner:__VERSION__
+          imagePullPolicy: Always
+          args: ["serve", "--addr", ":8080", "--run-dir", "/data"]
+          env:
+            - name: BUILD_VERSION
+              value: "__VERSION__"
+            - name: CLUSTER_DISPLAY_NAME
+              value: "preview (__PREVIEW_OWNER__)"
+            - name: KEYCLOAK_URL
+              value: "https://keycloak.apps.2026-prod-1.ocp.dasmlab.org"
+            - name: KEYCLOAK_REALM
+              value: "dasmlab"
+            - name: OIDC_CLIENT_ID
+              value: "dasm-burner"
+            - name: APP_PUBLIC_URL
+              value: "https://__PREVIEW_HOST__"
+            - name: OIDC_REDIRECT_URI
+              value: "https://__PREVIEW_HOST__/api/v1/auth/callback"
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dasm-burner-oidc
+                  key: client-secret
+            - name: OIDC_CA_FILE
+              value: /etc/oidc/ca.crt
+          volumeMounts:
+            - name: oidc-ca
+              mountPath: /etc/oidc
+              readOnly: true
+            - name: data
+              mountPath: /data
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "1"
+      volumes:
+        - name: oidc-ca
+          configMap:
+            name: dasm-burner-oidc-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: data
+          persistentVolumeClaim:
+            claimName: dasm-burner-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dasm-burner
+  namespace: __PREVIEW_NS__
+spec:
+  selector:
+    app: dasm-burner
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dasm-burner
+  namespace: __PREVIEW_NS__
+  labels:
+    app: dasm-burner
+    dasm-burner.dasmlab.org/preview-owner: "__PREVIEW_OWNER__"
+  annotations:
+    haproxy.router.openshift.io/timeout: 60s
+spec:
+  host: __PREVIEW_HOST__
+  to:
+    kind: Service
+    name: dasm-burner
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
