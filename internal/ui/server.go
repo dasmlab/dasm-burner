@@ -65,6 +65,7 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/templates", s.protect(s.templates))
 	s.Mux.Handle("/api/v1/templates/", s.protect(s.templateByName))
 	s.Mux.Handle("/api/v1/cluster", s.protect(s.cluster))
+	s.Mux.Handle("/api/v1/cluster/login", s.protect(s.addClusterLogin))
 	s.Mux.Handle("/api/v1/runs", s.protect(s.runs))
 	s.Mux.Handle("/api/v1/runs/", s.protect(s.runAction))
 	s.Mux.Handle("/api/v1/kube-burner-preview", s.protect(s.kubeBurnerPreview))

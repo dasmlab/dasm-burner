@@ -14,11 +14,12 @@
           outlined
           emit-value
           map-options
-          class="cluster-select q-mr-md"
+          class="cluster-select q-mr-sm"
           label="Cluster"
-          style="min-width: 240px"
+          style="min-width: 220px"
           @update:model-value="onClusterChange"
         />
+        <q-btn flat dense icon="add" label="Add" class="q-mr-md" @click="addOpen = true" />
         <div class="text-caption q-mr-md">{{ auth.displayName.value }}</div>
         <q-btn
           v-if="auth.authEnabled.value"
@@ -73,12 +74,47 @@
       <span>NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT</span>
       <span class="q-ml-md">© {{ year }} DASMLAB Inc.</span>
     </q-footer>
+
+    <q-dialog v-model="addOpen" persistent>
+      <q-card style="min-width: 560px; max-width: 720px">
+        <q-card-section>
+          <div class="text-h6">Add target cluster</div>
+          <div class="text-caption text-grey-7">
+            In the OpenShift console: your name → Copy login command → Display Token.
+            Paste either the <code>oc login</code> line, the <code>curl</code> Bearer line, or both.
+          </div>
+        </q-card-section>
+        <q-card-section>
+          <q-input
+            v-model="paste"
+            type="textarea"
+            autogrow
+            outlined
+            label="Paste login command"
+            hint="Accepts oc login --token … --server … and/or curl -H Authorization: Bearer …"
+          />
+          <q-input
+            v-model="customName"
+            class="q-mt-md"
+            dense
+            outlined
+            label="Display name (optional)"
+            hint="Defaults from api.&lt;cluster&gt;.…"
+          />
+          <p v-if="addError" class="text-negative text-caption q-mt-sm">{{ addError }}</p>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" v-close-popup @click="resetAdd" />
+          <q-btn color="primary" unelevated label="Add &amp; select" :loading="adding" @click="submitAdd" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-layout>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { getCluster, getVersion, selectCluster } from 'src/services/api'
+import { addClusterLogin, getCluster, getVersion, selectCluster } from 'src/services/api'
 import { useAuth } from 'src/services/auth'
 
 const auth = useAuth()
@@ -87,10 +123,15 @@ const versionLabel = ref('…')
 const year = new Date().getFullYear()
 const clusters = ref([])
 const clusterName = ref('')
+const addOpen = ref(false)
+const paste = ref('')
+const customName = ref('')
+const adding = ref(false)
+const addError = ref('')
 
 const clusterOptions = computed(() =>
   clusters.value.map((c) => ({
-    label: c.name,
+    label: c.source === 'login-command' ? `${c.name} (token)` : c.name,
     value: c.name,
     caption: c.server || c.source,
   })),
@@ -109,8 +150,38 @@ async function loadCluster() {
 async function onClusterChange(name) {
   const c = clusters.value.find((x) => x.name === name)
   if (!c) return
-  await selectCluster({ name: c.name, kubeconfig: c.kubeconfig, context: c.context })
+  await selectCluster({
+    name: c.name,
+    kubeconfig: c.kubeconfig,
+    context: c.context,
+    source: c.source,
+  })
   await loadCluster()
+}
+
+function resetAdd() {
+  paste.value = ''
+  customName.value = ''
+  addError.value = ''
+}
+
+async function submitAdd() {
+  adding.value = true
+  addError.value = ''
+  try {
+    const data = await addClusterLogin({
+      paste: paste.value,
+      name: customName.value || undefined,
+    })
+    clusters.value = data.clusters || []
+    clusterName.value = data.current?.name || data.added?.name || ''
+    addOpen.value = false
+    resetAdd()
+  } catch (e) {
+    addError.value = e.response?.data?.error || e.message
+  } finally {
+    adding.value = false
+  }
 }
 
 onMounted(async () => {

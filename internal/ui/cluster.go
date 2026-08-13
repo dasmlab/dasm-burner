@@ -93,13 +93,14 @@ func (s *Server) selectCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	cs := s.clusterState()
 	cs.mu.Lock()
-	cs.kubeconfig = pick.Kubeconfig
-	cs.context = pick.Context
-	cs.mu.Unlock()
-	if pick.Context != "" && pick.Kubeconfig != "" {
-		_ = os.Setenv("KUBECONFIG", pick.Kubeconfig)
-		// Prefer explicit context via loading rules in NewLive; store for display.
+	if pick.Source == "in-cluster" {
+		cs.kubeconfig = ""
+		cs.context = ""
+	} else {
+		cs.kubeconfig = pick.Kubeconfig
+		cs.context = pick.Context
 	}
+	cs.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"current": s.currentCluster(),
 		"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
@@ -245,6 +246,49 @@ func (s *Server) listClusters() []clusterInfo {
 					continue
 				}
 				seen[key] = true
+				out = append(out, info)
+			}
+		}
+	}
+
+	// Login-command targets written under runDir/clusters/*.kubeconfig
+	if entries, err := os.ReadDir(s.clustersDir()); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".kubeconfig") {
+				continue
+			}
+			path := filepath.Join(s.clustersDir(), e.Name())
+			cfg, err := clientcmd.LoadFromFile(path)
+			if err != nil || cfg == nil {
+				continue
+			}
+			for name, ctx := range cfg.Contexts {
+				if ctx == nil {
+					continue
+				}
+				server := ""
+				if cl, ok := cfg.Clusters[ctx.Cluster]; ok && cl != nil {
+					server = cl.Server
+				}
+				display := name
+				info := clusterInfo{
+					Name:       display,
+					Server:     server,
+					User:       "token",
+					Namespace:  ctx.Namespace,
+					Source:     "login-command",
+					Kubeconfig: path,
+					Context:    name,
+					Current:    activeCtx == name && activeKC == path,
+					Warning:    "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+				}
+				key := path + "|" + name
+				if seen[key] || seen[display] {
+					// Prefer updating current flag if name collision with in-cluster label.
+					continue
+				}
+				seen[key] = true
+				seen[display] = true
 				out = append(out, info)
 			}
 		}
