@@ -48,10 +48,7 @@ func WriteDir(outDir string, cfg *config.Config, g *topology.Graph, promURL, tok
 	measure := map[string]any{
 		"metricsEndpoints": []map[string]any{
 			{
-				"indexer": map[string]any{
-					"type":             "local",
-					"metricsDirectory": metricsDir,
-				},
+				"indexer": localIndexer(metricsDir),
 			},
 		},
 		"global": map[string]any{
@@ -110,10 +107,7 @@ func WriteDir(outDir string, cfg *config.Config, g *topology.Graph, promURL, tok
 		"skipTLSVerify": true,
 		"metrics":       []string{files.MetricsProfile},
 		"alerts":        []string{files.AlertsProfile},
-		"indexer": map[string]any{
-			"type":             "local",
-			"metricsDirectory": metricsDir,
-		},
+		"indexer":       localIndexer(metricsDir),
 	}}
 	if tokenFile != "" {
 		ep[0]["tokenFile"] = tokenFile

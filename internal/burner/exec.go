@@ -43,7 +43,7 @@ type MeasureProc struct {
 	Cmd *exec.Cmd
 }
 
-func StartMeasure(ctx context.Context, bin, measureYml, kubeconfig, runID string, duration time.Duration) (*MeasureProc, error) {
+func StartMeasure(ctx context.Context, bin, measureYml, kubeconfig, runID, userMeta string, duration time.Duration) (*MeasureProc, error) {
 	if duration <= 0 {
 		duration = 10 * time.Minute
 	}
@@ -56,6 +56,9 @@ func StartMeasure(ctx context.Context, bin, measureYml, kubeconfig, runID string
 		"--job-name", "dasm-burner-" + runID,
 		"--skip-log-file",
 		"--log-level", "info",
+	}
+	if userMeta != "" {
+		args = append(args, "--user-metadata", userMeta)
 	}
 	if kubeconfig != "" {
 		args = append(args, "--kubeconfig", kubeconfig)
@@ -103,7 +106,7 @@ func ignoreMeasureExit(err error) error {
 	return err
 }
 
-func Index(ctx context.Context, bin, kubeconfig, promURL, tokenFile, metricsYml, metricsDir, uuid string, start, end time.Time) error {
+func Index(ctx context.Context, bin, kubeconfig, promURL, tokenFile, metricsYml, metricsDir, uuid, userMeta string, start, end time.Time) error {
 	args := []string{
 		"index",
 		"--uuid", uuid,
@@ -111,11 +114,16 @@ func Index(ctx context.Context, bin, kubeconfig, promURL, tokenFile, metricsYml,
 		"--token-file", tokenFile,
 		"--metrics-profile", metricsYml,
 		"--metrics-directory", metricsDir,
+		"--indexer-type", "local",
+		"--tarball-name", MetricsTarballName,
 		"--start", strconv.FormatInt(start.Unix(), 10),
 		"--end", strconv.FormatInt(end.Unix(), 10),
 		"--skip-tls-verify",
 		"--job-name", "dasm-burner-" + uuid,
 		"--skip-log-file",
+	}
+	if userMeta != "" {
+		args = append(args, "--user-metadata", userMeta)
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	if kubeconfig != "" {

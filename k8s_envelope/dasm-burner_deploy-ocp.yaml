@@ -75,6 +75,21 @@ subjects:
     namespace: dasm-burner-system
 
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dasm-burner-data
+  namespace: dasm-burner-system
+  labels:
+    app: dasm-burner
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -164,7 +179,8 @@ spec:
               - key: ca.crt
                 path: ca.crt
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: dasm-burner-data
 
 ---
 apiVersion: v1
@@ -190,6 +206,8 @@ metadata:
   namespace: dasm-burner-system
   labels:
     app: dasm-burner
+  annotations:
+    haproxy.router.openshift.io/timeout: 60s
 spec:
   host: dasm-burner.apps.2026-prod-1.ocp.dasmlab.org
   to:

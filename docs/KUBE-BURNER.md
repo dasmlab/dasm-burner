@@ -10,6 +10,28 @@ Pinned release: **v2.8.1**. Install with `make kube-burner` → `./bin/kube-burn
 
 ---
 
+## Observability & Alerting touches (update when changing this area)
+
+We configure kube-burner as a **local indexer** per run (not Elastic/OpenSearch; TSDB deferred).
+
+| Touch | Detail |
+|-------|--------|
+| Commands | `measure`, `index`, `check-alerts` (subprocess binary v2.8.1) |
+| Flags | `--uuid` (=runId), `--job-name`, `--selector`, `--user-metadata`, `--metrics-directory`, `--tarball-name`, `--indexer-type=local` |
+| Rendered files | `measure.yml`, `init.yml`, `metrics.yml`, `alerts.yml`, `metrics-endpoint.yml`, `user-metadata.yml` |
+| Indexer | `type: local`, `createTarball: true`, `tarballName: kube-burner-metrics.tgz` under `kube-burner/collected/` |
+| Profiles | OVN per-node CPU/mem, API/etcd, instant `nodesReady` / `ovnPodsReady` with `captureStart` |
+| Alerts | warning-only (API 5xx, latency, etcd fsync, OVN CPU/mem) — do not fail apply |
+| Job summary | Parsed from collected `*jobSummary*.json`; user-metadata merged by kube-burner |
+| UI Execute | Real (non–dry-run) runs DiscoverPrometheus → measure → index → check-alerts before snapshot freeze |
+| Snapshot | `reports/<id>/` includes `snapshot.json`, `metrics/*.json`, tarball copy |
+| Report UI | Open/Close, OVN pods table with **restart Δ vs open**, jobSummary, metric cards, alerts |
+| Unused | elastic/opensearch, tsdb, `kube-burner import`, churn |
+
+Cleanup (product, not kube-burner): async background delete with wait scaled `15m + 5s*NS` (cap 45m), **not** tied to HTTP/`r.Context()` (avoids OCP route ~30s cancel).
+
+---
+
 ## Decision: subprocess binary, not a Go import
 
 kube-burner **is** a Go module (`github.com/kube-burner/kube-burner/v2`). We still **exec the published binary** from `internal/burner/exec.go`.
@@ -101,7 +123,8 @@ Not used (yet), and why:
 |------------------|------------|
 | `kube-burner init` as the apply engine | Phase 2 owns OpenShift-safe apply |
 | Churn / jobPause / hooks | Density curve is a controlled apply, not churn |
-| Elasticsearch indexer | Local indexer + `dasm-burner report` |
+| Elasticsearch indexer | Local indexer + tarball + `dasm-burner report` |
+| TSDB indexer | Deferred (Phase B); local JSON is enough for OVN report cards |
 | `global.functionTemplates` | Default go-template vars are enough |
 | Read / Patch jobs | Create + measure is the product |
 

@@ -28,6 +28,7 @@ type Server struct {
 	clusters       *clusterState
 	activeTemplate string
 	exec           *execManager
+	cleanupBusy    bool
 }
 
 func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *auth.Service) *Server {

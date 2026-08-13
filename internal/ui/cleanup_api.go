@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dasmlab/dasm-burner/internal/kube"
 	"github.com/dasmlab/dasm-burner/internal/runner"
-	"github.com/dasmlab/dasm-burner/internal/topology"
 )
 
 type deployStatus struct {
@@ -80,6 +81,7 @@ func (s *Server) cleanupCheck(w http.ResponseWriter, r *http.Request) {
 		"liveRuns":     status.LiveRuns,
 		"managedTotal": status.ManagedTotal,
 		"cluster":      cluster,
+		"cleaning":     s.isCleanupBusy(),
 		"run":          sink.snapshot(),
 		"warning":      "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
@@ -115,6 +117,7 @@ func (s *Server) cleanupStatus(w http.ResponseWriter, r *http.Request) {
 		"liveRuns":     status.LiveRuns,
 		"managedTotal": status.ManagedTotal,
 		"cluster":      s.currentCluster().Name,
+		"cleaning":     s.isCleanupBusy(),
 		"warning":      "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
@@ -253,12 +256,23 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 	}
 	m.mu.Unlock()
 
+	s.mu.Lock()
+	if s.cleanupBusy {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, fmt.Errorf("cleanup already in progress"))
+		return
+	}
+	s.cleanupBusy = true
+	s.mu.Unlock()
+
 	cl, err := s.liveClient(20, 40)
 	if err != nil {
+		s.mu.Lock()
+		s.cleanupBusy = false
+		s.mu.Unlock()
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	ctx := r.Context()
 	cluster := s.currentCluster().Name
 	sink := s.ensureLogSink()
 	logf := func(level, msg string) {
@@ -277,6 +291,9 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 			if cur != nil && !cur.DryRun && cur.RunID != "" {
 				runIDs = []string{cur.RunID}
 			} else {
+				s.mu.Lock()
+				s.cleanupBusy = false
+				s.mu.Unlock()
 				logf("error", "no previous real run to clean")
 				writeError(w, http.StatusBadRequest, fmt.Errorf("no previous real run to clean"))
 				return
@@ -286,6 +303,9 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 		}
 	case "template":
 		if body.Template == "" {
+			s.mu.Lock()
+			s.cleanupBusy = false
+			s.mu.Unlock()
 			writeError(w, http.StatusBadRequest, fmt.Errorf("template required for scope=template"))
 			return
 		}
@@ -293,6 +313,9 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 			runIDs = append(runIDs, e.RunID)
 		}
 		if len(runIDs) == 0 {
+			s.mu.Lock()
+			s.cleanupBusy = false
+			s.mu.Unlock()
 			logf("error", fmt.Sprintf("no recorded runs for template %q", body.Template))
 			writeError(w, http.StatusBadRequest, fmt.Errorf("no recorded runs for template %q", body.Template))
 			return
@@ -300,11 +323,14 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 	case "all":
 		runIDs = []string{""} // empty = all managed
 	default:
+		s.mu.Lock()
+		s.cleanupBusy = false
+		s.mu.Unlock()
 		writeError(w, http.StatusBadRequest, fmt.Errorf("scope must be last, template, or all"))
 		return
 	}
 
-	logf("info", fmt.Sprintf("start scope=%s template=%s cluster=%s dryRun=%v wait=%v",
+	logf("info", fmt.Sprintf("start scope=%s template=%s cluster=%s dryRun=%v wait=%v (async; independent of HTTP/route timeout)",
 		body.Scope, orEmpty(body.Template, "—"), cluster, body.DryRun, body.Wait))
 	if body.Scope == "all" {
 		logf("warn", "targeting ALL managed namespaces (any run / any template) on this cluster")
@@ -314,59 +340,76 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	type result struct {
-		RunID      string   `json:"runId"`
-		Prefix     string   `json:"prefix,omitempty"`
-		Namespaces []string `json:"namespaces"`
-		Remaining  []string `json:"remaining,omitempty"`
-		Error      string   `json:"error,omitempty"`
-	}
-	var results []result
-	started := time.Now()
-	hadErr := false
-	for _, rid := range runIDs {
-		res, err := runner.Cleanup(ctx, runner.CleanupOptions{
-			Cluster:     cl,
-			RunID:       rid,
-			DryRun:      body.DryRun,
-			Wait:        body.Wait && !body.DryRun,
-			WaitTimeout: 10 * time.Minute,
-			Log: func(msg string) {
-				logf("info", msg)
-			},
-		})
-		row := result{RunID: rid, Prefix: prefixForRun(rid)}
-		if res != nil {
-			row.Namespaces = res.Namespaces
-			row.Remaining = res.Remaining
-		}
-		if err != nil {
-			hadErr = true
-			row.Error = err.Error()
-			logf("error", err.Error())
-		}
-		results = append(results, row)
-	}
-
-	dur := time.Since(started)
-	deleted := 0
-	for _, row := range results {
-		deleted += len(row.Namespaces)
-	}
-	if hadErr {
-		logf("error", fmt.Sprintf("finished with errors in %s · attempted %d NS", dur, deleted))
-	} else {
-		logf("info", fmt.Sprintf("done in %s · %d namespace(s)", dur, deleted))
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"accepted": true,
+		"async":    true,
 		"scope":    body.Scope,
 		"dryRun":   body.DryRun,
 		"cluster":  cluster,
-		"results":  results,
-		"duration": dur.String(),
-		"selector": topology.Selector(""),
 		"run":      sink.snapshot(),
 		"warning":  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+		"note":     "Cleanup runs in the background; watch the live log. Poll /api/v1/cleanup until cleaning=false.",
 	})
+
+	go s.runCleanupJob(cl, runIDs, body.Wait, body.DryRun, cluster, sink)
+}
+
+func (s *Server) isCleanupBusy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cleanupBusy
+}
+
+func (s *Server) runCleanupJob(cl kube.Cluster, runIDs []string, wait, dryRun bool, cluster string, sink *execRun) {
+	defer func() {
+		s.mu.Lock()
+		s.cleanupBusy = false
+		s.mu.Unlock()
+	}()
+
+	logf := func(level, msg string) {
+		sink.appendLog(level, "CLEANUP", 0, msg)
+	}
+
+	// Detached from HTTP request — survives OpenShift route ~30s idle timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Minute)
+	defer cancel()
+
+	started := time.Now()
+	hadErr := false
+	deleted := 0
+	for _, rid := range runIDs {
+		nsCount := 0
+		if wait && !dryRun {
+			if names, err := cl.ListManagedNamespaces(ctx, rid); err == nil {
+				nsCount = len(names)
+			}
+		}
+		waitTO := runner.CleanupWaitTimeout(nsCount)
+		if nsCount > 0 {
+			logf("info", fmt.Sprintf("wait budget %s for ~%d namespace(s) on %s", waitTO, nsCount, cluster))
+		}
+		res, err := runner.Cleanup(ctx, runner.CleanupOptions{
+			Cluster:     cl,
+			RunID:       rid,
+			DryRun:      dryRun,
+			Wait:        wait && !dryRun,
+			WaitTimeout: waitTO,
+			Log:         func(msg string) { logf("info", msg) },
+		})
+		if res != nil {
+			deleted += len(res.Namespaces)
+		}
+		if err != nil {
+			hadErr = true
+			logf("error", err.Error())
+		}
+	}
+
+	dur := time.Since(started)
+	if hadErr {
+		logf("error", fmt.Sprintf("finished with errors in %s · attempted %d NS", dur.Round(time.Millisecond), deleted))
+	} else {
+		logf("info", fmt.Sprintf("done in %s · %d namespace(s)", dur.Round(time.Millisecond), deleted))
+	}
 }

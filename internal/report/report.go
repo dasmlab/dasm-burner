@@ -3,12 +3,14 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/dasmlab/dasm-burner/internal/burner"
 	"github.com/dasmlab/dasm-burner/internal/kube"
 	"github.com/dasmlab/dasm-burner/internal/runner"
 )
@@ -17,25 +19,27 @@ import (
 // When Immutable is true, Health/Open/Close were frozen at end of run and must not
 // be refreshed from the live cluster (cleanup would otherwise rewrite history).
 type Document struct {
-	GeneratedAt time.Time          `json:"generatedAt"`
-	SnapshotID  string             `json:"snapshotId,omitempty"`
-	Immutable   bool               `json:"immutable,omitempty"`
-	RunID       string             `json:"runId,omitempty"`
-	Prefix      string             `json:"prefix,omitempty"`
-	Template    string             `json:"template,omitempty"`
-	Cluster     string             `json:"cluster,omitempty"`
-	Status      string             `json:"status,omitempty"`
-	DryRun      bool               `json:"dryRun,omitempty"`
-	Started     time.Time          `json:"started,omitempty"`
-	Finished    time.Time          `json:"finished,omitempty"`
-	Desired     DesiredCounts      `json:"desired,omitempty"`
-	Open        SummaryBox         `json:"open,omitempty"`
-	Close       SummaryBox         `json:"close,omitempty"`
-	Health      kube.Health        `json:"health"`
-	Apply       *runner.Report     `json:"apply,omitempty"`
-	Metrics     map[string]Summary `json:"metrics,omitempty"`
-	Alerts      []map[string]any   `json:"alerts,omitempty"`
-	Narrative   string             `json:"narrative"`
+	GeneratedAt    time.Time          `json:"generatedAt"`
+	SnapshotID     string             `json:"snapshotId,omitempty"`
+	Immutable      bool               `json:"immutable,omitempty"`
+	RunID          string             `json:"runId,omitempty"`
+	Prefix         string             `json:"prefix,omitempty"`
+	Template       string             `json:"template,omitempty"`
+	Cluster        string             `json:"cluster,omitempty"`
+	Status         string             `json:"status,omitempty"`
+	DryRun         bool               `json:"dryRun,omitempty"`
+	Started        time.Time          `json:"started,omitempty"`
+	Finished       time.Time          `json:"finished,omitempty"`
+	Desired        DesiredCounts      `json:"desired,omitempty"`
+	Open           SummaryBox         `json:"open,omitempty"`
+	Close          SummaryBox         `json:"close,omitempty"`
+	Health         kube.Health        `json:"health"`
+	Apply          *runner.Report     `json:"apply,omitempty"`
+	JobSummary     map[string]any     `json:"jobSummary,omitempty"`
+	Metrics        map[string]Summary `json:"metrics,omitempty"`
+	Alerts         []map[string]any   `json:"alerts,omitempty"`
+	MetricsArchive string             `json:"metricsArchive,omitempty"`
+	Narrative      string             `json:"narrative"`
 }
 
 type Summary struct {
@@ -60,6 +64,10 @@ func Build(health kube.Health, apply *runner.Report, collectedDir string) (*Docu
 	if collectedDir != "" {
 		if err := loadCollected(collectedDir, doc); err != nil {
 			return nil, err
+		}
+		tarball := filepath.Join(collectedDir, burner.MetricsTarballName)
+		if st, err := os.Stat(tarball); err == nil && !st.IsDir() {
+			doc.MetricsArchive = burner.MetricsTarballName
 		}
 	}
 	doc.Narrative = narrative(doc)
@@ -97,11 +105,16 @@ func loadCollected(dir string, doc *Document) error {
 			continue
 		}
 		name := strings.TrimSuffix(e.Name(), ".json")
-		if strings.HasPrefix(name, "alert") {
+		lower := strings.ToLower(name)
+		if strings.HasPrefix(lower, "alert") {
 			var alerts []map[string]any
 			if json.Unmarshal(b, &alerts) == nil {
 				doc.Alerts = append(doc.Alerts, alerts...)
 			}
+			continue
+		}
+		if strings.Contains(lower, "jobsummary") {
+			attachJobSummary(b, doc)
 			continue
 		}
 		if s, ok := summarizeMetric(name, b); ok {
@@ -111,9 +124,25 @@ func loadCollected(dir string, doc *Document) error {
 	return nil
 }
 
+func attachJobSummary(b []byte, doc *Document) {
+	var rows []map[string]any
+	if err := json.Unmarshal(b, &rows); err == nil && len(rows) > 0 {
+		doc.JobSummary = rows[len(rows)-1]
+		return
+	}
+	var one map[string]any
+	if err := json.Unmarshal(b, &one); err == nil && one != nil {
+		doc.JobSummary = one
+	}
+}
+
 func summarizeMetric(name string, b []byte) (Summary, bool) {
 	var rows []map[string]any
 	if err := json.Unmarshal(b, &rows); err != nil || len(rows) == 0 {
+		return Summary{}, false
+	}
+	// Skip pure jobSummary objects if misnamed file
+	if mn, _ := rows[0]["metricName"].(string); strings.EqualFold(mn, "jobSummary") {
 		return Summary{}, false
 	}
 	s := Summary{Metric: name, Count: len(rows)}
@@ -121,9 +150,6 @@ func summarizeMetric(name string, b []byte) (Summary, bool) {
 	var n int
 	for _, r := range rows {
 		v, ok := asFloat(r["value"])
-		if !ok {
-			v, ok = asFloat(r["query"])
-		}
 		if !ok {
 			continue
 		}
@@ -133,10 +159,18 @@ func summarizeMetric(name string, b []byte) (Summary, bool) {
 			s.Max = v
 		}
 		s.Last = v
+		if ts, ok := r["timestamp"].(string); ok {
+			if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+				s.At = t
+			} else if t, err := time.Parse(time.RFC3339, ts); err == nil {
+				s.At = t
+			}
+		}
 	}
-	if n > 0 {
-		s.Avg = sum / float64(n)
+	if n == 0 {
+		return Summary{}, false
 	}
+	s.Avg = sum / float64(n)
 	return s, true
 }
 
@@ -195,8 +229,29 @@ func narrative(doc *Document) string {
 		b.WriteString("\n")
 	}
 	h := doc.Health
-	b.WriteString(fmt.Sprintf("## Cluster health (frozen)\n\nNodes Ready %d / not Ready %d. OVN pods Ready %d/%d (restarts %d). Managed pods Ready %d/%d. OOMKilled %d. Warning events %d.\n\n",
-		h.NodesReady, h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts, h.ManagedReady, h.ManagedPods, h.OOMKilled, h.WarningEvents))
+	b.WriteString(fmt.Sprintf("## Cluster health (frozen)\n\nNodes Ready %d / not Ready %d. OVN pods Ready %d/%d (restarts lifetime %d · Δ during run %d). Managed pods Ready %d/%d. OOMKilled %d. Warning events %d.\n\n",
+		h.NodesReady, h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts, h.OVNRestartsDelta, h.ManagedReady, h.ManagedPods, h.OOMKilled, h.WarningEvents))
+	if len(h.OVNDetail) > 0 {
+		b.WriteString("### OVN pods by node\n\n")
+		for _, p := range h.OVNDetail {
+			b.WriteString(fmt.Sprintf("- `%s` node=`%s` ready=%v restarts=%d Δ=%d phase=%s\n",
+				p.Name, orDash(p.Node), p.Ready, p.Restarts, p.RestartsDelta, orDash(p.Phase)))
+		}
+		b.WriteString("\n")
+	}
+	if doc.JobSummary != nil {
+		b.WriteString("## Job summary (kube-burner)\n\n")
+		if v, ok := doc.JobSummary["passed"]; ok {
+			b.WriteString(fmt.Sprintf("- passed: %v\n", v))
+		}
+		if v, ok := doc.JobSummary["elapsedTime"]; ok {
+			b.WriteString(fmt.Sprintf("- elapsedTime: %v\n", v))
+		}
+		if v, ok := doc.JobSummary["executionErrors"]; ok && fmt.Sprint(v) != "" {
+			b.WriteString(fmt.Sprintf("- executionErrors: %v\n", v))
+		}
+		b.WriteString("\n")
+	}
 	if doc.Apply != nil {
 		b.WriteString(fmt.Sprintf("Apply mode %s duration %s convergence %.1f%% aborted=%v.\n",
 			doc.Apply.Mode, doc.Apply.Duration, doc.Apply.Convergence.Overall, doc.Apply.Aborted))
@@ -218,8 +273,57 @@ func narrative(doc *Document) string {
 		}
 		b.WriteString("\n")
 	}
+	if doc.MetricsArchive != "" {
+		b.WriteString(fmt.Sprintf("Metrics archive: `%s`\n\n", doc.MetricsArchive))
+	}
 	if len(doc.Alerts) > 0 {
 		b.WriteString(fmt.Sprintf("## Alerts\n\n%d alert document(s) in collected metrics. Warnings do not fail apply.\n", len(doc.Alerts)))
 	}
 	return b.String()
+}
+
+// CopyMetricsIntoSnapshot copies collected JSON + tarball into reports/<id>/metrics/.
+func CopyMetricsIntoSnapshot(collectedDir, snapshotDir string) error {
+	if collectedDir == "" {
+		return nil
+	}
+	srcEnts, err := os.ReadDir(collectedDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	dst := filepath.Join(snapshotDir, "metrics")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	for _, e := range srcEnts {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".json") && name != burner.MetricsTarballName {
+			continue
+		}
+		if err := copyFile(filepath.Join(collectedDir, name), filepath.Join(dst, name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }

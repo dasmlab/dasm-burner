@@ -143,13 +143,24 @@ can still be written with only 20 concurrent API calls.`,
 				if kbFiles == nil {
 					return fmt.Errorf("--measure requires --out")
 				}
+				userMeta, _ := burner.WriteUserMetadata(kbDir, burner.UserMetadata{
+					RunID:             g.RunID,
+					Prefix:            burner.FormatPrefix(g.RunID),
+					DasmBurnerVersion: version,
+					DryRun:            false,
+					Namespaces:        g.Counts.Namespaces,
+					Services:          g.Counts.Services,
+					Routes:            g.Counts.Routes,
+					Deployments:       g.Counts.Deployments,
+					Pods:              g.Counts.Pods,
+				})
 				dur := 2 * time.Minute
 				nBatches := max(1, (g.Counts.Namespaces+max(cfg.Deployment.BatchSize, 1)-1)/max(cfg.Deployment.BatchSize, 1))
 				if nBatches > 2 {
 					dur = time.Duration(nBatches)*45*time.Second + time.Minute
 				}
 				indexStart = time.Now()
-				measureProc, err = burner.StartMeasure(context.Background(), kbBin, kbFiles.MeasureConfig, gf.kubeconfig, g.RunID, dur)
+				measureProc, err = burner.StartMeasure(context.Background(), kbBin, kbFiles.MeasureConfig, gf.kubeconfig, g.RunID, userMeta, dur)
 				if err != nil {
 					return fmt.Errorf("start kube-burner measure: %w", err)
 				}
@@ -167,7 +178,8 @@ can still be written with only 20 concurrent API calls.`,
 					if indexStart.IsZero() {
 						indexStart = end.Add(-5 * time.Minute)
 					}
-					if ierr := burner.Index(context.Background(), kbBin, gf.kubeconfig, prom.URL, prom.TokenFile, kbFiles.MetricsProfile, collected, g.RunID, indexStart.Add(-30*time.Second), end); ierr != nil {
+					metaPath := filepath.Join(kbDir, "user-metadata.yml")
+					if ierr := burner.Index(context.Background(), kbBin, gf.kubeconfig, prom.URL, prom.TokenFile, kbFiles.MetricsProfile, collected, g.RunID, metaPath, indexStart.Add(-30*time.Second), end); ierr != nil {
 						fmt.Fprintf(os.Stderr, "kube-burner index: %v\n", ierr)
 					}
 					if aerr := burner.CheckAlerts(context.Background(), kbBin, prom.URL, prom.TokenFile, kbFiles.AlertsProfile, collected, g.RunID, indexStart.Add(-30*time.Second), end); aerr != nil {

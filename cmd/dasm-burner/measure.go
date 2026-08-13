@@ -88,10 +88,20 @@ Requires the kube-burner binary (v2.8.1) on PATH or ./bin/kube-burner.`,
 			if err != nil {
 				return err
 			}
+			metaPath, _ := burner.WriteUserMetadata(dir, burner.UserMetadata{
+				RunID:             g.RunID,
+				Prefix:            burner.FormatPrefix(g.RunID),
+				DasmBurnerVersion: version,
+				Namespaces:        g.Counts.Namespaces,
+				Services:          g.Counts.Services,
+				Routes:            g.Counts.Routes,
+				Deployments:       g.Counts.Deployments,
+				Pods:              g.Counts.Pods,
+			})
 			start := time.Now()
 			fmt.Fprintf(os.Stderr, "kube-burner measure run-id=%s duration=%s selector=%s\n",
 				g.RunID, duration, topology.Selector(g.RunID))
-			proc, err := burner.StartMeasure(context.Background(), bin, files.MeasureConfig, gf.kubeconfig, g.RunID, duration)
+			proc, err := burner.StartMeasure(context.Background(), bin, files.MeasureConfig, gf.kubeconfig, g.RunID, metaPath, duration)
 			if err != nil {
 				return err
 			}
@@ -99,7 +109,7 @@ Requires the kube-burner binary (v2.8.1) on PATH or ./bin/kube-burner.`,
 				fmt.Fprintf(os.Stderr, "measure: %v\n", err)
 			}
 			end := time.Now()
-			if err := burner.Index(context.Background(), bin, gf.kubeconfig, prom.URL, prom.TokenFile, files.MetricsProfile, collected, g.RunID, start.Add(-30*time.Second), end); err != nil {
+			if err := burner.Index(context.Background(), bin, gf.kubeconfig, prom.URL, prom.TokenFile, files.MetricsProfile, collected, g.RunID, metaPath, start.Add(-30*time.Second), end); err != nil {
 				fmt.Fprintf(os.Stderr, "index: %v\n", err)
 			}
 			if err := burner.CheckAlerts(context.Background(), bin, prom.URL, prom.TokenFile, files.AlertsProfile, collected, g.RunID, start.Add(-30*time.Second), end); err != nil {

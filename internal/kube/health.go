@@ -13,6 +13,16 @@ import (
 
 const ovnNamespace = "openshift-ovn-kubernetes"
 
+// OVNPodDetail is one openshift-ovn-kubernetes pod (typically ovnkube-node / controller).
+type OVNPodDetail struct {
+	Name          string `json:"name"`
+	Node          string `json:"node,omitempty"`
+	Ready         bool   `json:"ready"`
+	Restarts      int    `json:"restarts"`
+	RestartsDelta int    `json:"restartsDelta,omitempty"`
+	Phase         string `json:"phase,omitempty"`
+}
+
 // Health is a cluster snapshot used for abort gates and the OVN report.
 type Health struct {
 	SampledAt     time.Time `json:"sampledAt"`
@@ -25,9 +35,11 @@ type Health struct {
 	FailedPods   int `json:"failedPods"`
 	OOMKilled    int `json:"oomKilled"`
 
-	OVNPods     int `json:"ovnPods"`
-	OVNReady    int `json:"ovnReady"`
-	OVNRestarts int `json:"ovnRestarts"`
+	OVNPods          int            `json:"ovnPods"`
+	OVNReady         int            `json:"ovnReady"`
+	OVNRestarts      int            `json:"ovnRestarts"`
+	OVNRestartsDelta int            `json:"ovnRestartsDelta,omitempty"`
+	OVNDetail        []OVNPodDetail `json:"ovnDetail,omitempty"`
 
 	WarningEvents int `json:"warningEvents"`
 	ErrorEvents   int `json:"errorEvents"`
@@ -71,10 +83,19 @@ func (l *Live) ClusterHealth(ctx context.Context, runID string) (Health, error) 
 	if err == nil {
 		for _, p := range ovn.Items {
 			h.OVNPods++
-			if podReady(p) {
+			ready := podReady(p)
+			if ready {
 				h.OVNReady++
 			}
-			h.OVNRestarts += restartCount(p)
+			rc := restartCount(p)
+			h.OVNRestarts += rc
+			h.OVNDetail = append(h.OVNDetail, OVNPodDetail{
+				Name:     p.Name,
+				Node:     p.Spec.NodeName,
+				Ready:    ready,
+				Restarts: rc,
+				Phase:    string(p.Status.Phase),
+			})
 		}
 	}
 
@@ -97,6 +118,33 @@ func (l *Live) ClusterHealth(ctx context.Context, runID string) (Health, error) 
 		}
 	}
 	return h, nil
+}
+
+// ApplyOVNRestartDeltas sets RestartsDelta on close relative to open watermarks (by pod name).
+func ApplyOVNRestartDeltas(open, close Health) Health {
+	base := map[string]int{}
+	for _, p := range open.OVNDetail {
+		base[p.Name] = p.Restarts
+	}
+	var deltaSum int
+	out := close
+	detail := make([]OVNPodDetail, len(close.OVNDetail))
+	for i, p := range close.OVNDetail {
+		d := p
+		if prev, ok := base[p.Name]; ok {
+			d.RestartsDelta = p.Restarts - prev
+			if d.RestartsDelta < 0 {
+				d.RestartsDelta = 0
+			}
+		} else {
+			d.RestartsDelta = 0 // new pod during run — don't blame lifetime count
+		}
+		deltaSum += d.RestartsDelta
+		detail[i] = d
+	}
+	out.OVNDetail = detail
+	out.OVNRestartsDelta = deltaSum
+	return out
 }
 
 func nodeReady(n corev1.Node) bool {

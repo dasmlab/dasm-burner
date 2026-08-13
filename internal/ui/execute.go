@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dasmlab/dasm-burner/internal/burner"
 	"github.com/dasmlab/dasm-burner/internal/config"
 	"github.com/dasmlab/dasm-burner/internal/kube"
 	"github.com/dasmlab/dasm-burner/internal/runner"
@@ -288,9 +289,17 @@ func SplitBatchCount(cfg *config.Config, ns int) int {
 
 func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun, skipBase bool) {
 	var (
-		lastRep    *runner.Report
-		openHealth kube.Health
+		lastRep     *runner.Report
+		openHealth  kube.Health
+		measureProc *burner.MeasureProc
+		kbBin       string
+		kbFiles     *burner.Files
+		prom        *burner.Prometheus
+		indexStart  time.Time
+		userMeta    string
 	)
+	collected := filepath.Join(s.RunDir, "kube-burner", "collected")
+	kbDir := filepath.Join(s.RunDir, "kube-burner")
 
 	defer func() {
 		fin := time.Now()
@@ -374,8 +383,59 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 	if cl != nil {
 		if h, err := cl.ClusterHealth(ctx, g.RunID); err == nil {
 			openHealth = h
-			run.appendLog("info", "OPEN", 0, fmt.Sprintf("health snapshot nodes Ready %d/%d OVN %d/%d",
-				h.NodesReady, h.NodesReady+h.NodesNotReady, h.OVNReady, h.OVNPods))
+			run.appendLog("info", "OPEN", 0, fmt.Sprintf("health snapshot nodes Ready %d/%d OVN %d/%d restarts=%d",
+				h.NodesReady, h.NodesReady+h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts))
+		}
+	}
+
+	if !dryRun {
+		_ = os.MkdirAll(kbDir, 0o755)
+		promURL, tokenFile := "", ""
+		if p, err := burner.DiscoverPrometheus(ctx, kc, filepath.Join(kbDir, "prometheus.token")); err != nil {
+			run.appendLog("warn", "MEASURE", 0, "prometheus discover: "+err.Error()+" (index/alerts skipped)")
+		} else {
+			prom = p
+			promURL, tokenFile = p.URL, p.TokenFile
+			run.appendLog("info", "MEASURE", 0, "prometheus "+p.URL)
+		}
+		var werr error
+		kbFiles, werr = burner.WriteDir(kbDir, cfg, g, promURL, tokenFile, collected)
+		if werr != nil {
+			run.appendLog("warn", "MEASURE", 0, "render kube-burner: "+werr.Error())
+		} else {
+			userMeta, _ = burner.WriteUserMetadata(kbDir, burner.UserMetadata{
+				RunID:             g.RunID,
+				Prefix:            run.Prefix,
+				Cluster:           run.Cluster,
+				Template:          run.Template,
+				DasmBurnerVersion: s.Version,
+				DryRun:            false,
+				Namespaces:        g.Counts.Namespaces,
+				Services:          g.Counts.Services,
+				Routes:            g.Counts.Routes,
+				Deployments:       g.Counts.Deployments,
+				Pods:              g.Counts.Pods,
+			})
+		}
+		if kbFiles != nil {
+			if bin, err := burner.FindBinary(); err != nil {
+				run.appendLog("warn", "MEASURE", 0, err.Error())
+			} else {
+				kbBin = bin
+				dur := 2 * time.Minute
+				nBatches := SplitBatchCount(cfg, g.Counts.Namespaces)
+				if nBatches > 2 {
+					dur = time.Duration(nBatches)*45*time.Second + time.Minute
+				}
+				indexStart = time.Now()
+				mp, err := burner.StartMeasure(ctx, kbBin, kbFiles.MeasureConfig, kc, g.RunID, userMeta, dur)
+				if err != nil {
+					run.appendLog("warn", "MEASURE", 0, "start measure: "+err.Error())
+				} else {
+					measureProc = mp
+					run.appendLog("info", "MEASURE", 0, fmt.Sprintf("kube-burner measure started duration=%s", dur))
+				}
+			}
 		}
 	}
 
@@ -406,6 +466,30 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 
 	rep, err := runner.Run(ctx, opts)
 	lastRep = rep
+
+	if measureProc != nil {
+		run.appendLog("info", "MEASURE", 0, "waiting for kube-burner measure to flush")
+		if werr := measureProc.Wait(); werr != nil {
+			run.appendLog("warn", "MEASURE", 0, werr.Error())
+		}
+		end := time.Now()
+		if indexStart.IsZero() {
+			indexStart = end.Add(-5 * time.Minute)
+		}
+		if kbBin != "" && prom != nil && kbFiles != nil {
+			run.appendLog("info", "INDEX", 0, "kube-burner index → "+collected)
+			if ierr := burner.Index(context.Background(), kbBin, kc, prom.URL, prom.TokenFile, kbFiles.MetricsProfile, collected, g.RunID, userMeta, indexStart.Add(-30*time.Second), end); ierr != nil {
+				run.appendLog("warn", "INDEX", 0, ierr.Error())
+			} else {
+				run.appendLog("info", "INDEX", 0, "metrics indexed (local + tarball)")
+			}
+			run.appendLog("info", "ALERTS", 0, "kube-burner check-alerts")
+			if aerr := burner.CheckAlerts(context.Background(), kbBin, prom.URL, prom.TokenFile, kbFiles.AlertsProfile, collected, g.RunID, indexStart.Add(-30*time.Second), end); aerr != nil {
+				run.appendLog("warn", "ALERTS", 0, aerr.Error())
+			}
+		}
+	}
+
 	if err != nil {
 		run.fail("", err.Error())
 		if rep != nil {

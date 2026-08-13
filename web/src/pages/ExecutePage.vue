@@ -453,11 +453,23 @@ async function doCleanup(scope) {
       dryRun: false,
     })
     if (data.run) run.value = data.run
-    const deleted = (data.results || []).reduce((n, r) => n + (r.namespaces?.length || 0), 0)
-    const failed = (data.results || []).some((r) => r.error)
-    cleanupMsg.value = failed
-      ? `Cleanup ${scope} finished with errors — see live log.`
-      : `Cleanup ${scope}: deleted ${deleted} namespace(s) on ${data.cluster || cluster.currentLabel.value}.`
+    cleanupMsg.value = `Cleanup ${scope} started in background on ${data.cluster || cluster.currentLabel.value} — watch live log (waits up to ~45m for slow NS deletes).`
+    // Poll until server reports cleaning=false (survives route timeouts).
+    const deadline = Date.now() + 50 * 60 * 1000
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 3000))
+      await poll()
+      const st = await getCleanupStatus(templateName.value).catch(() => null)
+      if (st) {
+        deploy.value = st.template || null
+        if (!st.cleaning) {
+          cleanupMsg.value = st.template?.deployed
+            ? `Cleanup finished but namespaces remain on ${st.cluster || ''} — see live log.`
+            : `Cleanup ${scope} finished on ${st.cluster || cluster.currentLabel.value}.`
+          break
+        }
+      }
+    }
     await refreshDeploy()
     await poll()
   } catch (e) {

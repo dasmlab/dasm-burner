@@ -24,6 +24,19 @@ type CleanupResult struct {
 	Remaining  []string `json:"remaining,omitempty"`
 }
 
+// CleanupWaitTimeout scales namespace termination wait for large OVN deletes.
+// Floor 15m, +5s per NS, cap 45m.
+func CleanupWaitTimeout(nsCount int) time.Duration {
+	d := 15*time.Minute + time.Duration(nsCount)*5*time.Second
+	if d < 15*time.Minute {
+		d = 15 * time.Minute
+	}
+	if d > 45*time.Minute {
+		d = 45 * time.Minute
+	}
+	return d
+}
+
 func Cleanup(ctx context.Context, opts CleanupOptions) (*CleanupResult, error) {
 	log := opts.Log
 	if log == nil {
@@ -69,9 +82,9 @@ func Cleanup(ctx context.Context, opts CleanupOptions) (*CleanupResult, error) {
 	}
 	timeout := opts.WaitTimeout
 	if timeout <= 0 {
-		timeout = 10 * time.Minute
+		timeout = CleanupWaitTimeout(len(names))
 	}
-	log(fmt.Sprintf("waiting up to %s for namespaces to terminate", timeout))
+	log(fmt.Sprintf("waiting up to %s for namespaces to terminate (%d targeted)", timeout, len(names)))
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		left, err := opts.Cluster.ListManagedNamespaces(ctx, opts.RunID)
@@ -83,8 +96,8 @@ func Cleanup(ctx context.Context, opts CleanupOptions) (*CleanupResult, error) {
 			log("all targeted namespaces gone")
 			return res, nil
 		}
-		log(fmt.Sprintf("still terminating: %d left", len(left)))
-		if err := sleep(ctx, 2*time.Second); err != nil {
+		log(fmt.Sprintf("still terminating: %d left · %s remaining", len(left), time.Until(deadline).Round(time.Second)))
+		if err := sleep(ctx, 5*time.Second); err != nil {
 			return res, err
 		}
 	}

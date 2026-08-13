@@ -109,8 +109,8 @@ func Freeze(apply *runner.Report, collectedDir string, meta Meta) (*Document, er
 		h := meta.Open
 		doc.Open.Health = &h
 		doc.Open.Highlights = append(doc.Open.Highlights,
-			fmt.Sprintf("cluster at open: nodes Ready %d / not Ready %d · OVN %d/%d",
-				h.NodesReady, h.NodesNotReady, h.OVNReady, h.OVNPods))
+			fmt.Sprintf("cluster at open: nodes Ready %d / not Ready %d · OVN %d/%d (restarts watermark %d)",
+				h.NodesReady, h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts))
 	}
 
 	closeAt := fin
@@ -124,7 +124,9 @@ func Freeze(apply *runner.Report, collectedDir string, meta Meta) (*Document, er
 		Desired:  &des,
 	}
 	if apply != nil {
-		h := apply.Health
+		h := kube.ApplyOVNRestartDeltas(meta.Open, apply.Health)
+		doc.Health = h
+		apply.Health = h
 		c := apply.Convergence
 		doc.Close.Health = &h
 		doc.Close.Convergence = &c
@@ -170,10 +172,16 @@ func closeHighlights(apply *runner.Report) []string {
 	h := apply.Health
 	out := []string{
 		fmt.Sprintf("nodes Ready %d / not Ready %d", h.NodesReady, h.NodesNotReady),
-		fmt.Sprintf("OVN Ready %d/%d (restarts %d)", h.OVNReady, h.OVNPods, h.OVNRestarts),
+		fmt.Sprintf("OVN Ready %d/%d · restarts Δ during run %d (lifetime %d)",
+			h.OVNReady, h.OVNPods, h.OVNRestartsDelta, h.OVNRestarts),
 		fmt.Sprintf("managed Ready %d/%d · OOM %d · warn events %d",
 			h.ManagedReady, h.ManagedPods, h.OOMKilled, h.WarningEvents),
 		fmt.Sprintf("mode %s · duration %s · batches %d", apply.Mode, apply.Duration, len(apply.Batches)),
+	}
+	for _, p := range h.OVNDetail {
+		if p.RestartsDelta > 0 || !p.Ready {
+			out = append(out, fmt.Sprintf("OVN %s @%s ready=%v Δrestarts=%d", p.Name, orDash(p.Node), p.Ready, p.RestartsDelta))
+		}
 	}
 	if apply.AbortReason != "" {
 		out = append(out, "abort: "+apply.AbortReason)
@@ -225,6 +233,8 @@ func WriteSnapshot(runDir string, doc *Document, apply *runner.Report) (string, 
 			return "", err
 		}
 	}
+	collected := filepath.Join(runDir, "kube-burner", "collected")
+	_ = CopyMetricsIntoSnapshot(collected, dir)
 	// Latest pointer for legacy GET /api/v1/report
 	_ = Write(runDir, doc)
 	return doc.SnapshotID, nil

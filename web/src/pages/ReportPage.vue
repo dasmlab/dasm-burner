@@ -5,7 +5,7 @@
         <div class="dasm-caps">Narrative</div>
         <h1 class="dasm-title">OVN / API report</h1>
         <p class="dasm-subtitle">
-          Immutable end-of-run snapshots. Cleanup does not rewrite history — pick a run below.
+          Immutable end-of-run snapshots with OVN node deltas, kube-burner metrics, and job summary.
         </p>
       </div>
     </div>
@@ -115,6 +115,95 @@
           </q-expansion-item>
 
           <q-expansion-item
+            v-if="ovnRows.length"
+            class="dasm-panel q-mb-md box-exp"
+            expand-separator
+            default-opened
+            icon="hub"
+            label="OVN pods by node"
+            :caption="`Δ restarts during run: ${ovnDeltaTotal}`"
+          >
+            <div class="q-pa-md">
+              <table class="ovn-table">
+                <thead>
+                  <tr>
+                    <th>Pod</th>
+                    <th>Node</th>
+                    <th>Ready</th>
+                    <th>Restarts</th>
+                    <th>Δ</th>
+                    <th>Phase</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="p in ovnRows" :key="p.name" :class="{ 'is-hot': p.restartsDelta > 0 || !p.ready }">
+                    <td class="text-mono">{{ p.name }}</td>
+                    <td class="text-mono">{{ p.node || '—' }}</td>
+                    <td>{{ p.ready ? 'yes' : 'no' }}</td>
+                    <td>{{ p.restarts }}</td>
+                    <td><strong>{{ p.restartsDelta || 0 }}</strong></td>
+                    <td>{{ p.phase || '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </q-expansion-item>
+
+          <q-expansion-item
+            v-if="selected.jobSummary"
+            class="dasm-panel q-mb-md box-exp"
+            expand-separator
+            default-opened
+            icon="summarize"
+            label="Job summary"
+            caption="kube-burner indexer document"
+          >
+            <div class="q-pa-md">
+              <ul class="box-list">
+                <li v-if="selected.jobSummary.passed != null">passed: <strong>{{ selected.jobSummary.passed }}</strong></li>
+                <li v-if="selected.jobSummary.elapsedTime != null">elapsedTime: {{ selected.jobSummary.elapsedTime }}s</li>
+                <li v-if="selected.jobSummary.uuid">uuid: <span class="text-mono">{{ selected.jobSummary.uuid }}</span></li>
+                <li v-if="selected.jobSummary.executionErrors">errors: {{ selected.jobSummary.executionErrors }}</li>
+                <li v-if="selected.jobSummary.runId">runId: {{ selected.jobSummary.runId }}</li>
+                <li v-if="selected.jobSummary.cluster">cluster: {{ selected.jobSummary.cluster }}</li>
+                <li v-if="selected.jobSummary.template">template: {{ selected.jobSummary.template }}</li>
+              </ul>
+            </div>
+          </q-expansion-item>
+
+          <q-expansion-item
+            v-if="alerts.length"
+            class="dasm-panel q-mb-md box-exp"
+            expand-separator
+            icon="warning"
+            label="Alerts"
+            :caption="`${alerts.length} document(s)`"
+          >
+            <div class="q-pa-md">
+              <ul class="box-list">
+                <li v-for="(a, i) in alerts" :key="'a'+i">
+                  <strong>{{ a.severity || a.metricName || 'alert' }}</strong>
+                  — {{ a.description || a.query || JSON.stringify(a) }}
+                </li>
+              </ul>
+            </div>
+          </q-expansion-item>
+
+          <div v-if="metrics.length" class="q-mb-md">
+            <div class="dasm-stat-label q-mb-sm">Prometheus / kube-burner metrics</div>
+            <div class="dasm-grid dasm-grid--2">
+              <div class="dasm-panel" v-for="m in metrics" :key="m.metric">
+                <div class="dasm-stat-label">{{ m.metric }}</div>
+                <div class="dasm-stat">{{ Number(m.last || 0).toPrecision(4) }}</div>
+                <div class="text-caption text-grey-7">max {{ Number(m.max || 0).toPrecision(4) }} · avg {{ Number(m.avg || 0).toPrecision(4) }} · n={{ m.count }}</div>
+              </div>
+            </div>
+            <div v-if="selected.metricsArchive" class="text-caption text-grey-7 q-mt-sm">
+              Archive in snapshot: <span class="text-mono">metrics/{{ selected.metricsArchive }}</span>
+            </div>
+          </div>
+
+          <q-expansion-item
             class="dasm-panel q-mb-md box-exp"
             expand-separator
             icon="article"
@@ -123,14 +212,6 @@
           >
             <div class="q-pa-md narrative">{{ selected.narrative }}</div>
           </q-expansion-item>
-
-          <div v-if="metrics.length" class="dasm-grid dasm-grid--2">
-            <div class="dasm-panel" v-for="m in metrics" :key="m.metric">
-              <div class="dasm-stat-label">{{ m.metric }}</div>
-              <div class="dasm-stat">{{ Number(m.last || 0).toPrecision(4) }}</div>
-              <div class="text-caption text-grey-7">max {{ Number(m.max || 0).toPrecision(4) }} · n={{ m.count }}</div>
-            </div>
-          </div>
         </template>
       </div>
     </div>
@@ -151,7 +232,16 @@ const list = ref([])
 const selectedId = ref('')
 const selected = ref(null)
 
-const metrics = computed(() => Object.values(selected.value?.metrics || {}))
+const metrics = computed(() => Object.values(selected.value?.metrics || {}).sort((a, b) => a.metric.localeCompare(b.metric)))
+const alerts = computed(() => selected.value?.alerts || [])
+const ovnRows = computed(() => {
+  const h = selected.value?.close?.health || selected.value?.health
+  return h?.ovnDetail || []
+})
+const ovnDeltaTotal = computed(() => {
+  const h = selected.value?.close?.health || selected.value?.health
+  return h?.ovnRestartsDelta ?? ovnRows.value.reduce((n, p) => n + (p.restartsDelta || 0), 0)
+})
 const conv = computed(() => {
   const c = selected.value?.close?.convergence || selected.value?.apply?.convergence
   if (!c) return null
@@ -269,5 +359,19 @@ onMounted(load)
 .box-exp {
   padding: 0;
   overflow: hidden;
+}
+.ovn-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.ovn-table th,
+.ovn-table td {
+  text-align: left;
+  padding: 0.35rem 0.45rem;
+  border-bottom: 1px solid #d9e2ea;
+}
+.ovn-table tr.is-hot td {
+  background: #fff4f0;
 }
 </style>
