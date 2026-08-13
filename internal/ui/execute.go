@@ -71,20 +71,12 @@ type execRun struct {
 	Warning     string             `json:"warning"`
 	mu          sync.Mutex         `json:"-"`
 	cancel      context.CancelFunc `json:"-"`
+	onChange    func()             `json:"-"`
 }
 
 type execManager struct {
 	mu  sync.Mutex
 	cur *execRun
-}
-
-func (s *Server) execMgr() *execManager {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.exec == nil {
-		s.exec = &execManager{}
-	}
-	return s.exec
 }
 
 func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
@@ -220,8 +212,23 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 		cancel:      cancel,
 		Steps:       planSteps(cfg, g),
 	}
+	run.attachPersist(s)
 	m.cur = run
 	m.mu.Unlock()
+
+	if !body.DryRun {
+		s.recordHistory(runHistoryEntry{
+			RunID:    g.RunID,
+			Template: body.Template,
+			Prefix:   pfx,
+			Seed:     g.Seed,
+			DryRun:   false,
+			Started:  now,
+			Status:   "running",
+			Cluster:  run.Cluster,
+		})
+	}
+	s.writeCurrentExec(run)
 
 	run.appendLog("info", "PREFIX", 0, fmt.Sprintf("common prefix %s · pattern %s-ns-00001-xxxx", pfx, pfx))
 	run.appendLog("info", "BATCH", 0, fmt.Sprintf("%s · size=%d waves=%d · %s",
@@ -351,6 +358,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 				SnapshotID: snapID,
 			})
 		}
+		s.writeCurrentExec(run)
 	}()
 
 	run.setStep("precheck", stepRunning, fmt.Sprintf("%s · starting", run.Prefix))
@@ -535,16 +543,19 @@ func (r *execRun) snapshot() *execRun {
 
 func (r *execRun) appendLog(level, phase string, batch int, msg string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.Logs = append(r.Logs, logLine{At: time.Now(), Level: level, Phase: phase, Batch: batch, Message: msg})
 	if len(r.Logs) > 2000 {
 		r.Logs = r.Logs[len(r.Logs)-2000:]
+	}
+	cb := r.onChange
+	r.mu.Unlock()
+	if cb != nil {
+		cb()
 	}
 }
 
 func (r *execRun) setStep(id string, st stepStatus, msg string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	now := time.Now()
 	for i := range r.Steps {
 		if r.Steps[i].ID != id {
@@ -558,7 +569,12 @@ func (r *execRun) setStep(id string, st stepStatus, msg string) {
 		if st == stepPassed || st == stepFailed || st == stepSkipped {
 			r.Steps[i].Finished = &now
 		}
-		return
+		break
+	}
+	cb := r.onChange
+	r.mu.Unlock()
+	if cb != nil {
+		cb()
 	}
 }
 

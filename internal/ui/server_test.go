@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHealthz(t *testing.T) {
@@ -71,5 +72,17 @@ func TestDryRunExecute(t *testing.T) {
 	s.Mux.ServeHTTP(rec, req)
 	if rec.Code != 202 {
 		t.Fatalf("start %d %s", rec.Code, rec.Body.String())
+	}
+	// Wait for async dry-run worker so TempDir cleanup isn't racing persist writes.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		m := s.execMgr()
+		m.mu.Lock()
+		cur := m.cur
+		m.mu.Unlock()
+		if cur != nil && cur.Status != "running" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

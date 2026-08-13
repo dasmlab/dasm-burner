@@ -65,16 +65,20 @@ func (s *Server) cleanupCheck(w http.ResponseWriter, r *http.Request) {
 	if status.Template != nil {
 		t := status.Template
 		if t.Deployed {
-			sink.appendLog("warn", "STATE", 0, fmt.Sprintf("ONLINE on %s · %s · %d NS · %v",
-				cluster, orEmpty(t.Prefix, "kb-?"), t.Count, t.Namespaces))
+			sink.appendLog("warn", "STATE", 0, fmt.Sprintf("ONLINE for template %s on %s · %s · %d NS",
+				t.Template, cluster, orEmpty(t.Prefix, "kb-?"), t.Count))
+		} else if status.ManagedTotal > 0 {
+			sink.appendLog("info", "STATE", 0, fmt.Sprintf(
+				"template %s has no live NS on %s — cluster still has %d managed NS under other run(s)/templates",
+				t.Template, cluster, status.ManagedTotal))
 		} else {
-			sink.appendLog("info", "STATE", 0, fmt.Sprintf("%s on %s · no managed NS for this template", t.Label, cluster))
+			sink.appendLog("info", "STATE", 0, fmt.Sprintf("template %s clean on %s (no managed NS on cluster)", t.Template, cluster))
 		}
 	}
 	sink.appendLog("info", "STATE", 0, fmt.Sprintf("cluster has %d managed NS total across %d run(s)",
 		status.ManagedTotal, len(status.LiveRuns)))
 	for _, row := range status.LiveRuns {
-		sink.appendLog("info", "STATE", 0, fmt.Sprintf("  live %s (%s) · %d NS", row.Prefix, orEmpty(row.Template, "?"), row.Count))
+		sink.appendLog("info", "STATE", 0, fmt.Sprintf("  live %s (%s) · %d NS", row.Prefix, orEmpty(row.Template, "unlabeled"), row.Count))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"template":     status.Template,
@@ -128,31 +132,77 @@ func (s *Server) computeCleanupStatus(r *http.Request, template string) (*cleanu
 		return nil, err
 	}
 	ctx := r.Context()
-	allNS, err := cl.ListManagedNamespaces(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-	byRun := map[string][]string{}
-	for _, name := range allNS {
-		rid := runIDFromNS(name)
-		byRun[rid] = append(byRun[rid], name)
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
-	out := &cleanupStatusPayload{ManagedTotal: len(allNS)}
+	type nsMeta struct {
+		name, runID, config string
+	}
+	var metas []nsMeta
+	if live, ok := cl.(*kube.Live); ok && live != nil {
+		infos, err := live.ListManagedNamespaceInfo(ctx, "")
+		if err != nil {
+			return nil, err
+		}
+		for _, info := range infos {
+			metas = append(metas, nsMeta{name: info.Name, runID: info.RunID, config: info.Config})
+		}
+	} else {
+		allNS, err := cl.ListManagedNamespaces(ctx, "")
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range allNS {
+			metas = append(metas, nsMeta{name: name, runID: runIDFromNS(name)})
+		}
+	}
+
+	byRun := map[string][]string{}
+	configByRun := map[string]string{}
+	for _, m := range metas {
+		rid := m.runID
+		if rid == "" {
+			rid = runIDFromNS(m.name)
+		}
+		byRun[rid] = append(byRun[rid], m.name)
+		if m.config != "" {
+			if prev, ok := configByRun[rid]; !ok || prev == "" {
+				configByRun[rid] = m.config
+			}
+		}
+	}
+
+	out := &cleanupStatusPayload{ManagedTotal: len(metas)}
 	cluster := s.currentCluster().Name
 
 	if template != "" {
 		st := &deployStatus{Template: template, Label: "cleaned", Deployed: false, Cluster: cluster}
 		var matched []string
 		var matchedRun string
-		for _, e := range s.runsForTemplate(template) {
-			if ns, ok := byRun[e.RunID]; ok && len(ns) > 0 {
-				matched = append(matched, ns...)
-				if matchedRun == "" {
-					matchedRun = e.RunID
-					st.Prefix = e.Prefix
-					if st.Prefix == "" {
-						st.Prefix = prefixForRun(e.RunID)
+
+		// Match live NS via dasm-burner.dasmlab.org/config (= template name).
+		// History alone is wrong mid-run (history used to be written only at finish).
+		for rid, ns := range byRun {
+			if configByRun[rid] != template {
+				continue
+			}
+			matched = append(matched, ns...)
+			if matchedRun == "" {
+				matchedRun = rid
+				st.Prefix = prefixForRun(rid)
+			}
+		}
+		if len(matched) == 0 {
+			for _, e := range s.runsForTemplate(template) {
+				if ns, ok := byRun[e.RunID]; ok && len(ns) > 0 {
+					matched = append(matched, ns...)
+					if matchedRun == "" {
+						matchedRun = e.RunID
+						st.Prefix = e.Prefix
+						if st.Prefix == "" {
+							st.Prefix = prefixForRun(e.RunID)
+						}
 					}
 				}
 			}
@@ -173,23 +223,26 @@ func (s *Server) computeCleanupStatus(r *http.Request, template string) (*cleanu
 			st.Namespaces = matched
 			st.Count = len(matched)
 			st.Label = "online"
-		} else if last == nil {
-			st.Label = "unknown"
+		} else {
+			st.Label = "cleaned"
 		}
 		out.Template = st
 	}
 
+	histByRun := map[string]string{}
+	for _, e := range s.runsForTemplate("") {
+		if e.RunID != "" && e.Template != "" {
+			histByRun[e.RunID] = e.Template
+		}
+	}
 	for rid, ns := range byRun {
 		if rid == "" {
 			continue
 		}
 		sort.Strings(ns)
-		tmpl := ""
-		for _, e := range s.runsForTemplate("") {
-			if e.RunID == rid {
-				tmpl = e.Template
-				break
-			}
+		tmpl := configByRun[rid]
+		if tmpl == "" {
+			tmpl = histByRun[rid]
 		}
 		out.LiveRuns = append(out.LiveRuns, liveRunRow{
 			RunID: rid, Prefix: prefixForRun(rid), Template: tmpl,
@@ -228,6 +281,7 @@ func (s *Server) ensureLogSink() *execRun {
 			Started: &now,
 			Warning: "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 		}
+		m.cur.attachPersist(s)
 	}
 	return m.cur
 }
@@ -290,6 +344,8 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 			m.mu.Unlock()
 			if cur != nil && !cur.DryRun && cur.RunID != "" {
 				runIDs = []string{cur.RunID}
+			} else if st, err := s.computeCleanupStatus(r, body.Template); err == nil && st.Template != nil && st.Template.RunID != "" {
+				runIDs = []string{st.Template.RunID}
 			} else {
 				s.mu.Lock()
 				s.cleanupBusy = false
@@ -309,15 +365,24 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("template required for scope=template"))
 			return
 		}
+		seen := map[string]bool{}
 		for _, e := range s.runsForTemplate(body.Template) {
-			runIDs = append(runIDs, e.RunID)
+			if e.RunID != "" && !seen[e.RunID] {
+				runIDs = append(runIDs, e.RunID)
+				seen[e.RunID] = true
+			}
+		}
+		if st, err := s.computeCleanupStatus(r, body.Template); err == nil && st.Template != nil && st.Template.RunID != "" {
+			if !seen[st.Template.RunID] {
+				runIDs = append(runIDs, st.Template.RunID)
+			}
 		}
 		if len(runIDs) == 0 {
 			s.mu.Lock()
 			s.cleanupBusy = false
 			s.mu.Unlock()
-			logf("error", fmt.Sprintf("no recorded runs for template %q", body.Template))
-			writeError(w, http.StatusBadRequest, fmt.Errorf("no recorded runs for template %q", body.Template))
+			logf("error", fmt.Sprintf("no recorded or live runs for template %q", body.Template))
+			writeError(w, http.StatusBadRequest, fmt.Errorf("no recorded or live runs for template %q", body.Template))
 			return
 		}
 	case "all":

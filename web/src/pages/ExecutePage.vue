@@ -12,6 +12,10 @@
     </div>
 
     <div v-if="error" class="dasm-panel q-mb-md text-negative">{{ error }}</div>
+    <div v-if="interrupted" class="dasm-panel q-mb-md text-warning">
+      Run <strong>{{ runPrefix }}</strong> was interrupted (server restart). Pipeline/log restored from disk —
+      apply may still be live on the cluster. Use Refresh / check state, then Clean if needed.
+    </div>
     <div v-if="cleanupMsg" class="dasm-panel q-mb-md text-positive">{{ cleanupMsg }}</div>
 
     <div class="row q-col-gutter-md q-mb-md">
@@ -232,6 +236,7 @@ import {
   selectTemplate,
   startRun,
 } from 'src/services/api'
+import api from 'src/services/api'
 import { useCluster } from 'src/services/cluster'
 
 const cluster = useCluster()
@@ -265,11 +270,12 @@ const steps = computed(() => run.value?.steps || [])
 const logs = computed(() => run.value?.logs || [])
 const runStatus = computed(() => run.value?.status || 'idle')
 const running = computed(() => runStatus.value === 'running')
+const interrupted = computed(() => runStatus.value === 'interrupted')
 const runPrefix = computed(() => run.value?.prefix || '')
 const runPattern = computed(() => run.value?.namePattern || '')
 const showReportLink = computed(() =>
   Boolean(run.value?.snapshotId || run.value?.reportUrl) &&
-  (runStatus.value === 'passed' || runStatus.value === 'failed'),
+  (runStatus.value === 'passed' || runStatus.value === 'failed' || runStatus.value === 'interrupted'),
 )
 const reportRoute = computed(() => {
   const q = {}
@@ -285,7 +291,9 @@ const deployLabel = computed(() => {
     const n = deploy.value.count || 0
     return `online on ${on} (${n} NS)`
   }
-  if (deploy.value.label === 'unknown') return `no recorded run · checked ${on}`
+  if (managedTotal.value > 0) {
+    return `no NS for this template on ${on} · ${managedTotal.value} other managed NS live`
+  }
   return `cleaned on ${on}`
 })
 const deployChipColor = computed(() => {
@@ -297,6 +305,7 @@ const statusColor = computed(() => {
   switch (runStatus.value) {
     case 'running': return 'warning'
     case 'passed': return 'positive'
+    case 'interrupted': return 'orange'
     case 'failed':
     case 'aborted': return 'negative'
     default: return 'grey-6'
@@ -378,9 +387,19 @@ async function poll() {
   try {
     const data = await getRun()
     run.value = data.run
+    // Rehydrate template selection from the active/restored run so nav-away/back works.
+    if (data.run?.template && data.run.template !== templateName.value) {
+      if (data.run.status === 'running' || data.run.status === 'interrupted') {
+        templateName.value = data.run.template
+      }
+    }
     await nextTick()
     if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
     if (!running.value && !cleaning.value) await refreshDeploy()
+    // Keep OIDC session alive during long applies so the page doesn't bounce to login.
+    if (running.value) {
+      api.get('/auth/keepalive').catch(() => {})
+    }
   } catch {
     /* ignore poll errors */
   }
