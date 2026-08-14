@@ -29,6 +29,7 @@ export const deleteTemplate = (name) => api.delete(`/templates/${encodeURICompon
 
 export const getCluster = () => api.get('/cluster').then((r) => r.data)
 export const selectCluster = (body) => api.put('/cluster', body).then((r) => r.data)
+export const addClusterLogin = (body) => api.post('/cluster/login', body).then((r) => r.data)
 export const getClusterCapacity = () => api.get('/cluster/capacity').then((r) => r.data)
 export const postWorkerMaxPods = (body) =>
   api.post('/cluster/maxpods', body, { timeout: 60_000 }).then((r) => r.data)
