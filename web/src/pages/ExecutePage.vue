@@ -709,6 +709,8 @@ function adoptRun(next) {
   }
   run.value = next
 }
+
+function applyLogEvent(ev) {
   const line = ev?.data
   if (!line) return
   const cl = cluster.currentName.value
@@ -834,6 +836,11 @@ async function start() {
       }
     }
     adoptRun(data.run)
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+  } finally {
+    starting.value = false
+  }
 }
 
 async function cancel() {
