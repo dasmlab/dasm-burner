@@ -537,8 +537,13 @@ async function applyMaxPods() {
 }
 
 async function refreshTemplates() {
+  const keep = templateName.value
   const data = await listTemplates()
   templates.value = data.templates || []
+  const names = new Set(templates.value.map((t) => t.name))
+  if (keep && names.has(keep)) {
+    return
+  }
   templateName.value = data.active || templates.value[0]?.name || ''
 }
 
@@ -603,12 +608,6 @@ async function poll() {
   try {
     const data = await getRun()
     run.value = data.run
-    // Rehydrate template selection from the active/restored run so nav-away/back works.
-    if (data.run?.template && data.run.template !== templateName.value) {
-      if (data.run.status === 'running' || data.run.status === 'interrupted') {
-        templateName.value = data.run.template
-      }
-    }
     await nextTick()
     if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
     if (!running.value && !cleaning.value) await refreshDeploy()
@@ -707,8 +706,8 @@ async function clearLog() {
 
 async function onTemplate(name) {
   if (!name) return
+  templateName.value = name
   await selectTemplate(name)
-  await refreshTemplates()
   await checkState('template selected')
 }
 
