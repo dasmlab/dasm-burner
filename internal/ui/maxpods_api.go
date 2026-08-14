@@ -50,6 +50,7 @@ func (s *Server) clusterCapacityAPI(w http.ResponseWriter, r *http.Request) {
 		managed = len(names)
 	}
 	mcp, _ := kube.ReadMCPRoll(ctx, live.Dynamic(), kube.WorkerMCPName)
+	maxPods, _ := kube.ReadWorkerMaxPods(ctx, live.Clientset(), live.Dynamic())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cluster":      target.Name,
 		"server":       target.Server,
@@ -57,6 +58,7 @@ func (s *Server) clusterCapacityAPI(w http.ResponseWriter, r *http.Request) {
 		"capacity":     cap,
 		"managedTotal": managed,
 		"mcp":          mcp,
+		"maxPods":      maxPods,
 		"warning":      "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
@@ -66,10 +68,43 @@ func (s *Server) loadActiveOrDefault() (*config.Config, error) {
 }
 
 func (s *Server) clusterMaxPodsAPI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodGet:
+		s.getWorkerMaxPods(w, r)
+	case http.MethodPost:
+		s.postWorkerMaxPods(w, r)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) getWorkerMaxPods(w http.ResponseWriter, r *http.Request) {
+	live, target, err := s.liveTyped()
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	st, err := kube.ReadWorkerMaxPods(ctx, live.Clientset(), live.Dynamic())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	sink := s.ensureLogSink()
+	sink.appendLog("info", "KUBELET", 0, fmt.Sprintf("current maxPods on %s · desired=%v live=%d–%d · rollout=%s (%s)",
+		target.Name, st.Desired, st.ObservedMin, st.ObservedMax, st.Rollout, st.RolloutReason))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cluster": target.Name,
+		"server":  target.Server,
+		"source":  target.Source,
+		"maxPods": st,
+		"run":     sink.snapshot(),
+		"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+	})
+}
+
+func (s *Server) postWorkerMaxPods(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		MaxPods int  `json:"maxPods"`
 		Confirm bool `json:"confirm"`

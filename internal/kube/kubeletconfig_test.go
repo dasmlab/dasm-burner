@@ -35,6 +35,39 @@ func TestWorkerKubeletConfigObject(t *testing.T) {
 	}
 }
 
+func TestClassifyMaxPodsRollout(t *testing.T) {
+	t.Parallel()
+	yes, _ := ClassifyMaxPodsRollout(WorkerMaxPodsStatus{
+		Configured: true, Desired: 1000, MatchingNodes: 15, WorkerNodes: 15,
+		ObservedMin: 1000, ObservedMax: 1000,
+		MCP: MCPRoll{MachineCount: 15, UpdatedCount: 15},
+	})
+	if yes != "yes" {
+		t.Fatalf("all match = %s", yes)
+	}
+	partial, _ := ClassifyMaxPodsRollout(WorkerMaxPodsStatus{
+		Configured: true, Desired: 1000, MatchingNodes: 4, WorkerNodes: 15,
+		ObservedMin: 250, ObservedMax: 1000,
+		MCP: MCPRoll{MachineCount: 15, UpdatedCount: 15},
+	})
+	if partial != "partial" {
+		t.Fatalf("mixed = %s", partial)
+	}
+	rolling, reason := ClassifyMaxPodsRollout(WorkerMaxPodsStatus{
+		Configured: true, Desired: 1000, MatchingNodes: 15, WorkerNodes: 15,
+		MCP: MCPRoll{Updating: true, MachineCount: 15, UpdatedCount: 3},
+	})
+	if rolling != "partial" {
+		t.Fatalf("updating = %s (%s)", rolling, reason)
+	}
+	none, _ := ClassifyMaxPodsRollout(WorkerMaxPodsStatus{
+		Configured: false, WorkerNodes: 15, ObservedMin: 250, ObservedMax: 250,
+	})
+	if none != "no" {
+		t.Fatalf("unset = %s", none)
+	}
+}
+
 func unstructuredInt(obj map[string]any, fields ...string) (int64, bool, error) {
 	cur := any(obj)
 	for _, f := range fields[:len(fields)-1] {

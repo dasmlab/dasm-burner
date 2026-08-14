@@ -226,6 +226,28 @@
         Replicas stay in the Topology template. This only changes OpenShift worker
         <code>maxPods</code> (KubeletConfig) so Execute precheck can fit.
       </div>
+      <div class="row items-center q-gutter-sm q-mb-sm">
+        <q-chip
+          dense
+          square
+          :color="maxPodsRolloutColor"
+          text-color="white"
+          :icon="maxPodsRolloutIcon"
+        >
+          rollout {{ workerMaxPods?.rollout || '…' }}
+        </q-chip>
+        <div class="text-caption">
+          <template v-if="workerMaxPods">
+            desired {{ workerMaxPods.configured ? workerMaxPods.desired : 'unset' }}
+            · live {{ workerMaxPods.observedMin === workerMaxPods.observedMax
+              ? workerMaxPods.observedTypical
+              : `${workerMaxPods.observedMin}–${workerMaxPods.observedMax}` }}
+            on {{ workerMaxPods.matchingNodes ?? 0 }}/{{ workerMaxPods.workerNodes ?? 0 }} workers
+            <span v-if="workerMaxPods.rolloutReason"> — {{ workerMaxPods.rolloutReason }}</span>
+          </template>
+          <template v-else>Get current to read KubeletConfig + node capacity.pods</template>
+        </div>
+      </div>
       <div class="row items-end q-col-gutter-sm">
         <div class="col-12 col-sm-3">
           <q-input
@@ -237,6 +259,17 @@
             min="110"
             max="2000"
             :disable="running || cleaning || settingMaxPods"
+          />
+        </div>
+        <div class="col-12 col-sm-auto">
+          <q-btn
+            outline
+            color="primary"
+            icon="refresh"
+            label="Get current"
+            :loading="readingMaxPods"
+            :disable="running || cleaning || settingMaxPods"
+            @click="refreshMaxPods(true)"
           />
         </div>
         <div class="col-12 col-sm-auto">
@@ -348,6 +381,7 @@ import {
   getCleanupStatus,
   getClusterCapacity,
   getRun,
+  getWorkerMaxPods,
   listCleanupReports,
   listTemplates,
   postCleanup,
@@ -386,6 +420,8 @@ const capacity = ref(null)
 const maxPodsInput = ref(500)
 const maxPodsOpen = ref(false)
 const settingMaxPods = ref(false)
+const readingMaxPods = ref(false)
+const workerMaxPods = ref(null)
 let timer = null
 let cleanupPoll = null
 
@@ -461,6 +497,22 @@ const projectedSlots = computed(() => {
   if (!nodes || !n) return 0
   return nodes * n
 })
+const maxPodsRolloutColor = computed(() => {
+  switch (workerMaxPods.value?.rollout) {
+    case 'yes': return 'positive'
+    case 'partial': return 'warning'
+    case 'no': return 'grey-7'
+    default: return 'grey-6'
+  }
+})
+const maxPodsRolloutIcon = computed(() => {
+  switch (workerMaxPods.value?.rollout) {
+    case 'yes': return 'check_circle'
+    case 'partial': return 'timelapse'
+    case 'no': return 'cancel'
+    default: return 'help'
+  }
+})
 const statusColor = computed(() => {
   switch (runStatus.value) {
     case 'running': return 'warning'
@@ -483,12 +535,40 @@ function fmt(at) {
 async function refreshCapacity() {
   try {
     capacity.value = await getClusterCapacity()
-    const typical = capacity.value?.capacity?.maxPodsTypical
-    if (typical && !maxPodsOpen.value) {
-      maxPodsInput.value = typical < 500 ? 500 : typical
+    if (capacity.value?.maxPods) {
+      applyMaxPodsStatus(capacity.value.maxPods, true)
+    } else {
+      const typical = capacity.value?.capacity?.maxPodsTypical
+      if (typical && !maxPodsOpen.value) {
+        maxPodsInput.value = typical < 500 ? 500 : typical
+      }
     }
   } catch {
     /* cluster may be unset */
+  }
+}
+
+function applyMaxPodsStatus(st, fillInput) {
+  workerMaxPods.value = st
+  if (!fillInput || maxPodsOpen.value) return
+  if (st?.configured && st.desired) {
+    maxPodsInput.value = st.desired
+  } else if (st?.observedTypical) {
+    maxPodsInput.value = st.observedTypical
+  }
+}
+
+async function refreshMaxPods(fillInput) {
+  readingMaxPods.value = true
+  error.value = ''
+  try {
+    const data = await getWorkerMaxPods()
+    applyMaxPodsStatus(data.maxPods || data, fillInput !== false)
+    if (data.run) run.value = data.run
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+  } finally {
+    readingMaxPods.value = false
   }
 }
 
@@ -527,6 +607,7 @@ async function applyMaxPods() {
     }
     await refreshCapacity()
     await refreshDeploy()
+    await refreshMaxPods(true)
   } catch (e) {
     error.value = e.response?.data?.error || e.message
   } finally {
