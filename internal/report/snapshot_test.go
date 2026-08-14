@@ -70,6 +70,9 @@ func TestFreezeAndListSnapshots(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "report.json")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "reports", id, "summary.json")); err != nil {
+		t.Fatal(err)
+	}
 	list, err := ListSnapshots(dir)
 	if err != nil || len(list) != 1 || list[0].SnapshotID != id {
 		t.Fatalf("%v %+v", err, list)

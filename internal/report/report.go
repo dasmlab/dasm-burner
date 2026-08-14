@@ -298,7 +298,8 @@ func narrative(doc *Document) string {
 		sort.Strings(keys)
 		for _, k := range keys {
 			m := doc.Metrics[k]
-			b.WriteString(fmt.Sprintf("- %s: n=%d last=%.4g max=%.4g avg=%.4g\n", m.Metric, m.Count, m.Last, m.Max, m.Avg))
+			b.WriteString(fmt.Sprintf("- %s: last %s · max %s · avg %s (n=%d)\n",
+				HumanLabel(m.Metric), HumanValue(m.Metric, m.Last), HumanValue(m.Metric, m.Max), HumanValue(m.Metric, m.Avg), m.Count))
 		}
 		b.WriteString("\n")
 	}

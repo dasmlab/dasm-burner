@@ -51,6 +51,7 @@ func (s *Server) reportByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	slimSnapshot(doc)
 	writeJSON(w, http.StatusOK, doc)
 }
 
@@ -67,10 +68,12 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		slimSnapshot(doc)
 		writeJSON(w, http.StatusOK, doc)
 		return
 	}
 	if doc, err := report.LatestSnapshot(s.RunDir); err == nil && doc != nil {
+		slimSnapshot(doc)
 		writeJSON(w, http.StatusOK, doc)
 		return
 	}
@@ -161,4 +164,15 @@ func (s *Server) persistRunSnapshot(run *execRun, g *topology.Graph, apply *runn
 		doc.RunID = rid
 	}
 	return report.WriteSnapshot(s.RunDir, doc, apply)
+}
+
+// slimSnapshot drops duplicated per-batch health copies so GET /reports/:id
+// stays small enough for the control-plane pod + HAProxy (listing used to unmarshal every snapshot).
+func slimSnapshot(doc *report.Document) {
+	if doc == nil || doc.Apply == nil {
+		return
+	}
+	for i := range doc.Apply.Batches {
+		doc.Apply.Batches[i].Health = kube.Health{}
+	}
 }

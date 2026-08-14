@@ -6,6 +6,19 @@ const api = axios.create({
   withCredentials: true,
 })
 
+api.interceptors.response.use(undefined, async (err) => {
+  const cfg = err.config
+  if (!cfg) return Promise.reject(err)
+  const method = String(cfg.method || 'get').toLowerCase()
+  const st = err.response?.status
+  const retryable = method === 'get' && (st === 502 || st === 503)
+  const n = cfg.__retryCount || 0
+  if (!retryable || n >= 3) return Promise.reject(err)
+  cfg.__retryCount = n + 1
+  await new Promise((r) => setTimeout(r, 400 * cfg.__retryCount))
+  return api.request(cfg)
+})
+
 export default api
 
 export const getVersion = () => api.get('/version').then((r) => r.data)
@@ -15,9 +28,10 @@ export const getHealth = () => api.get('/health').then((r) => r.data)
 export const getOverview = () => api.get('/overview').then((r) => r.data)
 export const clearHealthBaseline = () => api.post('/health/baseline', {}).then((r) => r.data)
 export const getReport = (id) =>
-  api.get('/report', { params: id ? { id } : {} }).then((r) => r.data)
-export const listReports = () => api.get('/reports').then((r) => r.data)
-export const getReportById = (id) => api.get(`/reports/${encodeURIComponent(id)}`).then((r) => r.data)
+  api.get('/report', { params: id ? { id } : {}, timeout: 60_000 }).then((r) => r.data)
+export const listReports = () => api.get('/reports', { timeout: 60_000 }).then((r) => r.data)
+export const getReportById = (id) =>
+  api.get(`/reports/${encodeURIComponent(id)}`, { timeout: 60_000 }).then((r) => r.data)
 export const getTopology = () => api.get('/topology').then((r) => r.data)
 export const putTopology = (body) => api.put('/topology', body).then((r) => r.data)
 export const getKubeBurnerPreview = () => api.get('/kube-burner-preview').then((r) => r.data)

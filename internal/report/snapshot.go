@@ -214,12 +214,14 @@ func closeHighlights(apply *runner.Report) []string {
 	h := apply.Health
 	out := []string{
 		fmt.Sprintf("nodes Ready %d / not Ready %d", h.NodesReady, h.NodesNotReady),
-		fmt.Sprintf("OVN Ready %d/%d · restarts Δ during run %d (lifetime %d)",
-			h.OVNReady, h.OVNPods, h.OVNRestartsDelta, h.OVNRestarts),
-		fmt.Sprintf("managed Ready %d/%d · OOM %d · warn events %d",
-			h.ManagedReady, h.ManagedPods, h.OOMKilled, h.WarningEvents),
-		fmt.Sprintf("mode %s · apply duration %s · batches %d",
-			apply.Mode, apply.Duration.Round(time.Second), len(apply.Batches)),
+		fmt.Sprintf("OVN Ready %d/%d", h.OVNReady, h.OVNPods),
+		fmt.Sprintf("OVN restarts Δ during run %d (lifetime %d)", h.OVNRestartsDelta, h.OVNRestarts),
+		fmt.Sprintf("managed Ready %d/%d", h.ManagedReady, h.ManagedPods),
+		fmt.Sprintf("OOM %d", h.OOMKilled),
+		fmt.Sprintf("warn events %d", h.WarningEvents),
+		fmt.Sprintf("mode %s", apply.Mode),
+		fmt.Sprintf("apply duration %s", apply.Duration.Round(time.Second)),
+		fmt.Sprintf("batches %d", len(apply.Batches)),
 	}
 	for _, p := range h.OVNDetail {
 		if p.RestartsDelta > 0 || !p.Ready {
@@ -278,9 +280,51 @@ func WriteSnapshot(runDir string, doc *Document, apply *runner.Report) (string, 
 	}
 	collected := filepath.Join(runDir, "kube-burner", "collected")
 	_ = CopyMetricsIntoSnapshot(collected, dir)
+	_ = writeSummaryFile(dir, listItemFromDoc(doc))
 	// Latest pointer for legacy GET /api/v1/report
 	_ = Write(runDir, doc)
 	return doc.SnapshotID, nil
+}
+
+func listItemFromDoc(doc *Document) ListItem {
+	if doc == nil {
+		return ListItem{}
+	}
+	item := ListItem{
+		SnapshotID:    doc.SnapshotID,
+		RunID:         doc.RunID,
+		Prefix:        doc.Prefix,
+		Template:      doc.Template,
+		Cluster:       doc.Cluster,
+		Status:        doc.Status,
+		DryRun:        doc.DryRun,
+		Immutable:     doc.Immutable,
+		GeneratedAt:   doc.GeneratedAt,
+		Started:       doc.Started,
+		Finished:      doc.Finished,
+		Duration:      doc.Duration,
+		DurationMs:    doc.DurationMs,
+		BatchCount:    doc.BatchCount,
+		OpenHeadline:  doc.Open.Headline,
+		CloseHeadline: doc.Close.Headline,
+	}
+	if doc.Apply != nil {
+		item.ConvergenceOverall = doc.Apply.Convergence.Overall
+	} else if doc.Close.Convergence != nil {
+		item.ConvergenceOverall = doc.Close.Convergence.Overall
+	}
+	return item
+}
+
+func writeSummaryFile(snapshotDir string, item ListItem) error {
+	if item.SnapshotID == "" {
+		return nil
+	}
+	b, err := json.MarshalIndent(item, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(snapshotDir, "summary.json"), b, 0o644)
 }
 
 // ListItem is a compact row for the reports index.
@@ -319,32 +363,14 @@ func ListSnapshots(runDir string) ([]ListItem, error) {
 		if !e.IsDir() {
 			continue
 		}
-		doc, err := LoadSnapshot(runDir, e.Name())
-		if err != nil || doc == nil {
-			continue
-		}
-		item := ListItem{
-			SnapshotID:    doc.SnapshotID,
-			RunID:         doc.RunID,
-			Prefix:        doc.Prefix,
-			Template:      doc.Template,
-			Cluster:       doc.Cluster,
-			Status:        doc.Status,
-			DryRun:        doc.DryRun,
-			Immutable:     doc.Immutable,
-			GeneratedAt:   doc.GeneratedAt,
-			Started:       doc.Started,
-			Finished:      doc.Finished,
-			Duration:      doc.Duration,
-			DurationMs:    doc.DurationMs,
-			BatchCount:    doc.BatchCount,
-			OpenHeadline:  doc.Open.Headline,
-			CloseHeadline: doc.Close.Headline,
-		}
-		if doc.Apply != nil {
-			item.ConvergenceOverall = doc.Apply.Convergence.Overall
-		} else if doc.Close.Convergence != nil {
-			item.ConvergenceOverall = doc.Close.Convergence.Overall
+		item, ok := loadSummary(runDir, e.Name())
+		if !ok {
+			doc, err := LoadSnapshot(runDir, e.Name())
+			if err != nil || doc == nil {
+				continue
+			}
+			item = listItemFromDoc(doc)
+			_ = writeSummaryFile(filepath.Join(root, e.Name()), item)
 		}
 		out = append(out, item)
 	}
@@ -352,6 +378,19 @@ func ListSnapshots(runDir string) ([]ListItem, error) {
 		return out[i].GeneratedAt.After(out[j].GeneratedAt)
 	})
 	return out, nil
+}
+
+func loadSummary(runDir, snapshotID string) (ListItem, bool) {
+	path := filepath.Join(runDir, "reports", snapshotID, "summary.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ListItem{}, false
+	}
+	var item ListItem
+	if err := json.Unmarshal(b, &item); err != nil || item.SnapshotID == "" {
+		return ListItem{}, false
+	}
+	return item, true
 }
 
 // LoadSnapshot reads an immutable snapshot by id.

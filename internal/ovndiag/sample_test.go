@@ -1,6 +1,7 @@
 package ovndiag
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -11,10 +12,24 @@ func TestWorstState(t *testing.T) {
 	}
 }
 
-func TestWhyHealthy(t *testing.T) {
-	s := &Snapshot{OverallState: StateHealthy, HealthyCount: 3}
-	if why(s) == "" {
-		t.Fatal("expected why text")
+func TestWhyLinesAreSeparate(t *testing.T) {
+	s := &Snapshot{
+		OverallState:  StateWarning,
+		HealthyCount:  1,
+		WarningCount:  2,
+		CriticalCount: 0,
+		Findings: []Finding{
+			{RuleID: "OVN302", Node: "n1", Summary: "mem high", Why: "grew vs baseline", Severity: SevWarning},
+			{RuleID: "OVN301", Node: "n2", Summary: "cpu high", Why: "rose vs baseline", Severity: SevWarning},
+		},
+	}
+	lines := whyLines(s)
+	if len(lines) < 4 {
+		t.Fatalf("want headline + 2 findings + confidence, got %#v", lines)
+	}
+	joined := why(s)
+	if !strings.Contains(joined, "\n") {
+		t.Fatalf("why should be newline-separated, got %q", joined)
 	}
 }
 

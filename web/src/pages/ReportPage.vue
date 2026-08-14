@@ -53,8 +53,11 @@
       </div>
 
       <div class="col-12 col-md-8">
-        <div v-if="!selected" class="dasm-panel text-caption text-grey-7">
+        <div v-if="!selected && !loadingSnap" class="dasm-panel text-caption text-grey-7">
           Select a snapshot to view Open / Close summaries.
+        </div>
+        <div v-else-if="loadingSnap && !selected" class="dasm-panel text-caption text-grey-7">
+          Loading snapshot…
         </div>
         <template v-else>
           <div class="dasm-panel q-mb-md">
@@ -217,11 +220,15 @@
 
           <div v-if="metrics.length" class="q-mb-md">
             <div class="dasm-stat-label q-mb-sm">Prometheus / kube-burner metrics</div>
-            <div class="dasm-grid dasm-grid--2">
-              <div class="dasm-panel" v-for="m in metrics" :key="m.metric">
-                <div class="dasm-stat-label">{{ m.metric }}</div>
-                <div class="dasm-stat">{{ Number(m.last || 0).toPrecision(4) }}</div>
-                <div class="text-caption text-grey-7">max {{ Number(m.max || 0).toPrecision(4) }} · avg {{ Number(m.avg || 0).toPrecision(4) }} · n={{ m.count }}</div>
+            <div class="dasm-grid dasm-grid--3">
+              <div class="dasm-panel metric-card" v-for="m in metrics" :key="m.metric">
+                <div class="dasm-stat-label">{{ metricLabel(m.metric) }}</div>
+                <div class="dasm-stat">{{ formatMetric(m.metric, m.last) }}</div>
+                <div class="text-caption text-grey-7">
+                  max {{ formatMetric(m.metric, m.max) }}
+                  · avg {{ formatMetric(m.metric, m.avg) }}
+                  · n={{ m.count }}
+                </div>
               </div>
             </div>
             <div v-if="selected.metricsArchive" class="text-caption text-grey-7 q-mt-sm">
@@ -265,11 +272,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getReport, getReportById, listReports } from 'src/services/api'
+import { formatMetric, metricLabel } from 'src/utils/metrics'
 
 const route = useRoute()
 const router = useRouter()
 
 const loading = ref(false)
+const loadingSnap = ref(false)
 const error = ref('')
 const list = ref([])
 const selectedId = ref('')
@@ -309,17 +318,28 @@ function fmt(at) {
   }
 }
 
+function errText(e) {
+  const st = e.response?.status
+  if (st === 503 || st === 502) {
+    return 'Server returned 503 while loading this snapshot (large freeze or pod restart). Click the snapshot again — list/load is now lighter and retries automatically.'
+  }
+  return e.response?.data?.error || e.message || 'failed to load snapshot'
+}
+
 async function select(id) {
   if (!id) return
   selectedId.value = id
   error.value = ''
+  loadingSnap.value = true
   try {
     selected.value = await getReportById(id)
     if (route.query.id !== id) {
       router.replace({ name: 'report', query: { id } })
     }
   } catch (e) {
-    error.value = e.response?.data?.error || e.message || 'failed to load snapshot'
+    error.value = errText(e)
+  } finally {
+    loadingSnap.value = false
   }
 }
 
@@ -339,7 +359,7 @@ async function load() {
       }
     }
   } catch (e) {
-    error.value = e.response?.data?.error || e.message || 'failed to load reports'
+    error.value = errText(e)
   } finally {
     loading.value = false
   }
@@ -433,4 +453,5 @@ onMounted(load)
 .lv-error { color: #ff8f8f; }
 .lv-warn { color: #ffd27a; }
 .timing-row { border-top: 1px solid var(--dasm-border-soft); padding-top: 0.75rem; }
+.metric-card .dasm-stat { font-size: 1.35rem; }
 </style>

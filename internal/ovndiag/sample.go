@@ -54,7 +54,8 @@ func SampleWith(ctx context.Context, cs kubernetes.Interface, baseline *Baseline
 	}
 	if !caps.HasOVNNamespace {
 		snap.OverallState = StateWarning
-		snap.Why = "openshift-ovn-kubernetes namespace not found — OVN diagnoser cannot run L2+."
+		snap.WhyLines = []string{"openshift-ovn-kubernetes namespace not found — OVN diagnoser cannot run L2+."}
+		snap.Why = snap.WhyLines[0]
 		snap.Findings = []Finding{{
 			ID: fmt.Sprintf("OVN000-missing-ns-%d", time.Now().Unix()), RuleID: "OVN000",
 			Severity: SevWarning, Category: CatOVNKube, Summary: "OVN namespace missing",
@@ -149,7 +150,8 @@ func SampleWith(ctx context.Context, cs kubernetes.Interface, baseline *Baseline
 	// Cluster-level findings can raise overall severity
 	snap.OverallState = worstState(snap.OverallState, severitiesToState(findings)...)
 	snap.Timeline = append(snap.Timeline, buildTimeline(findings, batchID, now)...)
-	snap.Why = why(snap)
+	snap.WhyLines = whyLines(snap)
+	snap.Why = strings.Join(snap.WhyLines, "\n")
 	return snap, nil
 }
 
@@ -354,8 +356,12 @@ func buildTimeline(fs []Finding, batchID int, now time.Time) []TimelineEvent {
 }
 
 func why(s *Snapshot) string {
+	return strings.Join(whyLines(s), "\n")
+}
+
+func whyLines(s *Snapshot) []string {
 	if s.OverallState == StateHealthy {
-		return "All observed nodes and ovnkube-node pods look healthy vs baseline. Confidence: HIGH"
+		return []string{"All observed nodes and ovnkube-node pods look healthy vs baseline.", "Confidence: HIGH"}
 	}
 	var parts []string
 	parts = append(parts, fmt.Sprintf("Overall %s — %d healthy, %d warning, %d critical.",
@@ -379,11 +385,11 @@ func why(s *Snapshot) string {
 			}
 			parts = append(parts, line)
 			n++
-			if n >= 6 {
+			if n >= 8 {
 				break
 			}
 		}
 	}
 	parts = append(parts, "Confidence: "+conf)
-	return strings.Join(parts, " ")
+	return parts
 }

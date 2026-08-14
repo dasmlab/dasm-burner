@@ -53,7 +53,32 @@
           <div class="text-caption text-mono">{{ capsLabel }}</div>
         </div>
       </div>
-      <div v-if="snap.why" class="q-mt-md"><strong>Why?</strong> {{ snap.why }}</div>
+      <div v-if="whyLines.length" class="q-mt-md">
+        <div class="dasm-stat-label q-mb-xs">Why?</div>
+        <ul class="why-list">
+          <li v-for="(line, i) in whyLines" :key="i">{{ line }}</li>
+        </ul>
+      </div>
+    </div>
+
+    <div v-if="snap" class="dasm-panel q-mb-md">
+      <div class="row items-center justify-between q-mb-sm">
+        <div class="dasm-stat-label">Findings</div>
+        <span class="text-caption text-grey-7">{{ findings.length }} warning+ in this sample</span>
+      </div>
+      <div v-if="!findings.length" class="text-caption text-grey-7">No warning+ findings in selected sample.</div>
+      <div v-else class="finding-grid">
+        <div v-for="f in findings" :key="f.id" class="finding-card">
+          <div class="finding-head">
+            <q-badge dense :color="sevColor(f.severity)" text-color="white">{{ f.ruleId }}</q-badge>
+            <strong>{{ ruleTitle(f.ruleId) }}</strong>
+            <span class="text-mono text-grey-7" v-if="f.node">{{ f.node }}</span>
+          </div>
+          <div class="finding-summary">{{ f.summary }}</div>
+          <div class="text-caption text-grey-7" v-if="ruleAbout(f.ruleId)">{{ ruleAbout(f.ruleId) }}</div>
+          <div class="text-caption" v-if="f.why">{{ f.why }}</div>
+        </div>
+      </div>
     </div>
 
     <div class="dasm-panel q-mb-md">
@@ -147,22 +172,6 @@
             </li>
           </ul>
         </div>
-        <div class="dasm-panel q-mb-md">
-          <div class="dasm-stat-label q-mb-sm">Findings</div>
-          <ul class="detail-list">
-            <li v-for="f in findings" :key="f.id">
-              <div>
-                <q-badge dense :color="sevColor(f.severity)" text-color="white">{{ f.ruleId }}</q-badge>
-                <strong class="q-ml-xs">{{ ruleTitle(f.ruleId) }}</strong>
-                <span class="text-grey-7" v-if="f.node"> · {{ f.node }}</span>
-              </div>
-              <div>{{ f.summary }}</div>
-              <div class="text-caption text-grey-7">{{ ruleAbout(f.ruleId) }}</div>
-              <div class="text-caption" v-if="f.why">{{ f.why }}</div>
-            </li>
-            <li v-if="!findings.length" class="text-grey-7">No warning+ findings in selected sample.</li>
-          </ul>
-        </div>
         <div class="dasm-panel">
           <div class="dasm-stat-label q-mb-sm">Events in this sample</div>
           <ul class="detail-list">
@@ -186,6 +195,7 @@ import {
   listOVNDiagHistory,
   sampleOVNDiag,
 } from 'src/services/api'
+import { splitWhy } from 'src/utils/metrics'
 import { useCluster } from 'src/services/cluster'
 
 const cluster = useCluster()
@@ -214,8 +224,12 @@ const capsLabel = computed(() => {
   return Object.keys(c).filter((k) => c[k]).join(', ') || '—'
 })
 const findings = computed(() =>
-  (snap.value?.findings || []).filter((f) => ['WARNING', 'ERROR', 'CRITICAL', 'NOTICE'].includes(f.severity)).slice(0, 40),
+  (snap.value?.findings || []).filter((f) => ['WARNING', 'ERROR', 'CRITICAL', 'NOTICE'].includes(f.severity)).slice(0, 80),
 )
+const whyLines = computed(() => {
+  if (snap.value?.whyLines?.length) return snap.value.whyLines
+  return splitWhy(snap.value?.why)
+})
 const nodeDetail = computed(() => (snap.value?.nodes || []).find((n) => n.nodeName === selectedNode.value) || null)
 const clusterLabel = computed(() => cluster.currentLabel?.value || snap.value?.cluster || '—')
 const baselineLabel = computed(() => {
@@ -378,5 +392,35 @@ onMounted(loadLatest)
   font-size: 0.85rem;
 }
 .detail-list li { margin-bottom: 0.45rem; }
+.why-list {
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #1d2b36;
+}
+.why-list li { margin-bottom: 0.4rem; }
+.finding-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+@media (min-width: 900px) {
+  .finding-grid { grid-template-columns: 1fr 1fr; }
+}
+.finding-card {
+  border: 1px solid #d9e2ea;
+  border-radius: 10px;
+  background: #f7fafc;
+  padding: 0.75rem 0.85rem;
+}
+.finding-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+.finding-summary { font-size: 0.9rem; margin-bottom: 0.25rem; }
 .text-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 </style>

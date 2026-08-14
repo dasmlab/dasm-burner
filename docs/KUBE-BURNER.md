@@ -26,7 +26,7 @@ We configure kube-burner as a **local indexer** per run (not Elastic/OpenSearch;
 | UI Execute | Real (non–dry-run) runs DiscoverPrometheus → measure → index → check-alerts before snapshot freeze |
 | Snapshot | `reports/<id>/` includes `snapshot.json`, `metrics/*.json`, tarball copy |
 | Report UI | Open/Close, OVN pods table with **restart Δ vs open**, jobSummary, metric cards, alerts |
-| Control-plane pod | Live+preview: requests `256Mi`, limits **`1Gi`** (was 256Mi/512Mi — OOMKilled on smoke2500+) |
+| Control-plane pod | Live+preview: requests `256Mi`, limits **`2Gi`** (was 1Gi — OOMKilled opening large Report snapshots) |
 | ObjectPressure | Basetype `OpenShiftObjectPressure`: render `init.yml` + `objectTemplates/` via `internal/burner/pressure.go`; live apply is **`kube-burner init`** (density stays client-go) |
 | Unused | elastic/opensearch, tsdb, `kube-burner import`, churn (except ObjectPressure `init`) |
 

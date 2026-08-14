@@ -122,6 +122,7 @@ type Snapshot struct {
 	Findings      []Finding       `json:"findings,omitempty"`
 	Timeline      []TimelineEvent `json:"timeline,omitempty"`
 	Why           string          `json:"why,omitempty"`
+	WhyLines      []string        `json:"whyLines,omitempty"`
 	Capabilities  map[string]bool `json:"capabilities,omitempty"`
 	HealthyCount  int             `json:"healthyCount"`
 	WarningCount  int             `json:"warningCount"`
