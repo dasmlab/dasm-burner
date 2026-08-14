@@ -25,8 +25,15 @@ type Files struct {
 }
 
 // WriteDir renders kube-burner configs from a dasm-burner topology.
-// Phase 2 still owns apply; kube-burner measure/index consume these files.
+// Density: measure/index templates. ObjectPressure: also used by kube-burner init.
 func WriteDir(outDir string, cfg *config.Config, g *topology.Graph, promURL, tokenFile, metricsDir string) (*Files, error) {
+	if cfg != nil && cfg.IsObjectPressure() {
+		return WriteObjectPressureDir(outDir, cfg, g, promURL, tokenFile, metricsDir)
+	}
+	return writeDensityDir(outDir, cfg, g, promURL, tokenFile, metricsDir)
+}
+
+func writeDensityDir(outDir string, cfg *config.Config, g *topology.Graph, promURL, tokenFile, metricsDir string) (*Files, error) {
 	files := &Files{
 		Dir:             outDir,
 		MeasureConfig:   filepath.Join(outDir, "measure.yml"),

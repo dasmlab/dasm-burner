@@ -11,16 +11,59 @@ func Validate(c *Config) error {
 	if c.APIVersion != APIVersion {
 		errs = append(errs, fmt.Sprintf("apiVersion must be %s", APIVersion))
 	}
-	if c.Kind != Kind {
-		errs = append(errs, fmt.Sprintf("kind must be %s", Kind))
+	switch c.Kind {
+	case Kind, KindObjectPressure:
+	default:
+		errs = append(errs, fmt.Sprintf("kind must be %s or %s", Kind, KindObjectPressure))
 	}
 	if strings.TrimSpace(c.Metadata.Name) == "" {
 		errs = append(errs, "metadata.name is required")
 	}
-
 	if c.Topology.Namespaces.Count < 1 {
 		errs = append(errs, "topology.namespaces.count must be >= 1")
 	}
+
+	if c.Kind == KindObjectPressure {
+		errs = append(errs, validateObjectPressure(c)...)
+	} else {
+		errs = append(errs, validateNetworkDensity(c)...)
+	}
+
+	for _, p := range []struct {
+		name string
+		p    NamePrefix
+	}{
+		{"naming.namespace", c.Naming.Namespace},
+		{"naming.service", c.Naming.Service},
+		{"naming.route", c.Naming.Route},
+		{"naming.deployment", c.Naming.Deployment},
+	} {
+		if strings.TrimSpace(p.p.Prefix) == "" {
+			errs = append(errs, p.name+".prefix is required")
+		}
+		if p.p.RandomLength < 1 || p.p.RandomLength > 8 {
+			errs = append(errs, p.name+".randomLength must be 1-8")
+		}
+	}
+
+	if !c.Naming.Seed.Auto && c.Naming.Seed.Value == 0 {
+		errs = append(errs, "naming.seed must be auto or a non-zero integer")
+	}
+
+	switch c.Deployment.Mode {
+	case DeploySequential, DeployBatch, DeployRate:
+	default:
+		errs = append(errs, fmt.Sprintf("deployment.mode must be %s, %s, or %s", DeploySequential, DeployBatch, DeployRate))
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("invalid config:\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	return nil
+}
+
+func validateNetworkDensity(c *Config) []string {
+	var errs []string
 	if c.Topology.Services.PerNamespace < 1 {
 		errs = append(errs, "topology.services.perNamespace must be >= 1")
 	}
@@ -60,54 +103,70 @@ func Validate(c *Config) error {
 	if c.Application.Response.Type != "podName" {
 		errs = append(errs, `application.response.type must be "podName"`)
 	}
+	return errs
+}
 
-	for _, p := range []struct {
-		name string
-		p    NamePrefix
-	}{
-		{"naming.namespace", c.Naming.Namespace},
-		{"naming.service", c.Naming.Service},
-		{"naming.route", c.Naming.Route},
-		{"naming.deployment", c.Naming.Deployment},
-	} {
-		if strings.TrimSpace(p.p.Prefix) == "" {
-			errs = append(errs, p.name+".prefix is required")
+func validateObjectPressure(c *Config) []string {
+	var errs []string
+	enabled := 0
+	for i, o := range c.Topology.Objects {
+		if strings.TrimSpace(o.ID) == "" {
+			errs = append(errs, fmt.Sprintf("topology.objects[%d].id is required", i))
 		}
-		if p.p.RandomLength < 1 || p.p.RandomLength > 8 {
-			errs = append(errs, p.name+".randomLength must be 1-8")
+		if !o.Enabled {
+			continue
 		}
+		enabled++
+		if strings.TrimSpace(o.APIVersion) == "" || strings.TrimSpace(o.Kind) == "" {
+			errs = append(errs, fmt.Sprintf("topology.objects[%s] needs apiVersion and kind", o.ID))
+		}
+		if o.ReplicasPerNS < 1 {
+			errs = append(errs, fmt.Sprintf("topology.objects[%s].replicasPerNamespace must be >= 1", o.ID))
+		}
+		// Custom entries may use generic GVK scaffolding when inlineYAML/templateRef are empty.
 	}
-
-	if !c.Naming.Seed.Auto && c.Naming.Seed.Value == 0 {
-		errs = append(errs, "naming.seed must be auto or a non-zero integer")
+	if enabled < 1 {
+		errs = append(errs, "topology.objects must enable at least one kind")
 	}
-
-	switch c.Deployment.Mode {
-	case DeploySequential, DeployBatch, DeployRate:
-	default:
-		errs = append(errs, fmt.Sprintf("deployment.mode must be %s, %s, or %s", DeploySequential, DeployBatch, DeployRate))
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("invalid config:\n  - %s", strings.Join(errs, "\n  - "))
-	}
-	return nil
+	return errs
 }
 
 // Counts is the intended object arithmetic for a topology. Pods are
 // Deployment replicas, not separately created Pod objects.
 type Counts struct {
-	Namespaces  int `json:"namespaces" yaml:"namespaces"`
-	Services    int `json:"services" yaml:"services"`
-	Routes      int `json:"routes" yaml:"routes"`
-	Deployments int `json:"deployments" yaml:"deployments"`
-	Pods        int `json:"pods" yaml:"pods"`
-	Pairs       int `json:"pairs" yaml:"pairs"`
-	Intended    int `json:"intendedObjects" yaml:"intendedObjects"`
+	Namespaces  int            `json:"namespaces" yaml:"namespaces"`
+	Services    int            `json:"services" yaml:"services"`
+	Routes      int            `json:"routes" yaml:"routes"`
+	Deployments int            `json:"deployments" yaml:"deployments"`
+	Pods        int            `json:"pods" yaml:"pods"`
+	Pairs       int            `json:"pairs" yaml:"pairs"`
+	Intended    int            `json:"intendedObjects" yaml:"intendedObjects"`
+	ByKind      map[string]int `json:"byKind,omitempty" yaml:"byKind,omitempty"`
 }
 
 func (c *Config) Counts() Counts {
 	ns := c.Topology.Namespaces.Count
+	if c.Kind == KindObjectPressure {
+		by := map[string]int{}
+		total := ns
+		for _, o := range c.Topology.Objects {
+			if !o.Enabled {
+				continue
+			}
+			n := ns * o.ReplicasPerNS
+			key := o.Kind
+			if key == "" {
+				key = o.ID
+			}
+			by[key] += n
+			total += n
+		}
+		return Counts{
+			Namespaces: ns,
+			Intended:   total,
+			ByKind:     by,
+		}
+	}
 	svc := ns * c.Topology.Services.PerNamespace
 	rt := ns * c.Topology.Routes.PerNamespace
 	dep := svc // one Deployment per service in oneToOne
@@ -121,4 +180,8 @@ func (c *Config) Counts() Counts {
 		Pairs:       svc,
 		Intended:    ns + svc + rt + dep,
 	}
+}
+
+func (c *Config) IsObjectPressure() bool {
+	return c != nil && c.Kind == KindObjectPressure
 }

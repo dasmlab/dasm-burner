@@ -11,12 +11,13 @@ import (
 
 // Snapshot is observed object counts for a managed run.
 type Snapshot struct {
-	Namespaces  int `json:"namespaces"`
-	Services    int `json:"services"`
-	Routes      int `json:"routes"`
-	Deployments int `json:"deployments"`
-	Pods        int `json:"pods"`
-	ReadyPods   int `json:"readyPods"`
+	Namespaces  int            `json:"namespaces"`
+	Services    int            `json:"services"`
+	Routes      int            `json:"routes"`
+	Deployments int            `json:"deployments"`
+	Pods        int            `json:"pods"`
+	ReadyPods   int            `json:"readyPods"`
+	PodPhases   map[string]int `json:"podPhases,omitempty"`
 }
 
 // Cluster is the apply/observe surface. Tests use Fake; apply uses Live.

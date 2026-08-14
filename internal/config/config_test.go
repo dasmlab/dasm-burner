@@ -7,14 +7,17 @@ import (
 	"testing"
 )
 
-func TestStartingTemplateValidates(t *testing.T) {
-	c := StartingTemplate()
+func TestStartingObjectPressureValidates(t *testing.T) {
+	c := StartingObjectPressure()
 	if err := Validate(c); err != nil {
 		t.Fatal(err)
 	}
+	if c.Kind != KindObjectPressure {
+		t.Fatalf("kind = %s", c.Kind)
+	}
 	got := c.Counts()
-	if got.Namespaces != 2 || got.Services != 4 || got.Pods != 12 {
-		t.Fatalf("starting counts = %+v", got)
+	if got.Namespaces != 2 || got.ByKind["ConfigMap"] != 20 || got.Intended < 2 {
+		t.Fatalf("object-pressure counts = %+v", got)
 	}
 }
 

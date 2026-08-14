@@ -16,14 +16,34 @@ import (
 )
 
 type deployStatus struct {
-	Template   string   `json:"template,omitempty"`
-	RunID      string   `json:"runId,omitempty"`
-	Prefix     string   `json:"prefix,omitempty"`
-	Deployed   bool     `json:"deployed"`
-	Namespaces []string `json:"namespaces,omitempty"`
-	Count      int      `json:"count"`
-	Label      string   `json:"label"` // online | cleaned | unknown
-	Cluster    string   `json:"cluster,omitempty"`
+	Template     string         `json:"template,omitempty"`
+	RunID        string         `json:"runId,omitempty"`
+	Prefix       string         `json:"prefix,omitempty"`
+	Deployed     bool           `json:"deployed"`
+	Namespaces   []string       `json:"namespaces,omitempty"`
+	Count        int            `json:"count"`
+	Label        string         `json:"label"` // online | cleaned | unknown
+	Cluster      string         `json:"cluster,omitempty"`
+	Objects      *objectCounts  `json:"objects,omitempty"`
+}
+
+type objectCounts struct {
+	Namespaces  int            `json:"namespaces"`
+	Routes      int            `json:"routes"`
+	Services    int            `json:"services"`
+	Deployments int            `json:"deployments"`
+	Pods        int            `json:"pods"`
+	ReadyPods   int            `json:"readyPods"`
+	PodPhases   map[string]int `json:"podPhases,omitempty"`
+}
+
+type liveRunRow struct {
+	RunID      string        `json:"runId"`
+	Prefix     string        `json:"prefix"`
+	Template   string        `json:"template,omitempty"`
+	Count      int           `json:"count"`
+	Namespaces []string      `json:"namespaces,omitempty"`
+	Objects    *objectCounts `json:"objects,omitempty"`
 }
 
 func (s *Server) cleanupAPI(w http.ResponseWriter, r *http.Request) {
@@ -67,8 +87,13 @@ func (s *Server) cleanupCheck(w http.ResponseWriter, r *http.Request) {
 	if status.Template != nil {
 		t := status.Template
 		if t.Deployed {
-			sink.appendLog("warn", "STATE", 0, fmt.Sprintf("ONLINE for template %s on %s · %s · %d NS",
-				t.Template, cluster, orEmpty(t.Prefix, "kb-?"), t.Count))
+			obj := ""
+			if t.Objects != nil {
+				obj = fmt.Sprintf(" · routes=%d svcs=%d pods=%d/%d",
+					t.Objects.Routes, t.Objects.Services, t.Objects.ReadyPods, t.Objects.Pods)
+			}
+			sink.appendLog("warn", "STATE", 0, fmt.Sprintf("ONLINE for template %s on %s · %s · %d NS%s",
+				t.Template, cluster, orEmpty(t.Prefix, "kb-?"), t.Count, obj))
 		} else if status.ManagedTotal > 0 {
 			sink.appendLog("info", "STATE", 0, fmt.Sprintf(
 				"template %s has no live NS on %s — cluster still has %d managed NS under other run(s)/templates",
@@ -80,7 +105,12 @@ func (s *Server) cleanupCheck(w http.ResponseWriter, r *http.Request) {
 	sink.appendLog("info", "STATE", 0, fmt.Sprintf("cluster has %d managed NS total across %d run(s)",
 		status.ManagedTotal, len(status.LiveRuns)))
 	for _, row := range status.LiveRuns {
-		sink.appendLog("info", "STATE", 0, fmt.Sprintf("  live %s (%s) · %d NS", row.Prefix, orEmpty(row.Template, "unlabeled"), row.Count))
+		extra := ""
+		if row.Objects != nil {
+			extra = fmt.Sprintf(" · routes=%d svcs=%d pods=%d/%d",
+				row.Objects.Routes, row.Objects.Services, row.Objects.ReadyPods, row.Objects.Pods)
+		}
+		sink.appendLog("info", "STATE", 0, fmt.Sprintf("  live %s (%s) · %d NS%s", row.Prefix, orEmpty(row.Template, "unlabeled"), row.Count, extra))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"template":     status.Template,
@@ -97,14 +127,6 @@ type cleanupStatusPayload struct {
 	Template     *deployStatus
 	LiveRuns     []liveRunRow
 	ManagedTotal int
-}
-
-type liveRunRow struct {
-	RunID      string   `json:"runId"`
-	Prefix     string   `json:"prefix"`
-	Template   string   `json:"template,omitempty"`
-	Count      int      `json:"count"`
-	Namespaces []string `json:"namespaces,omitempty"`
 }
 
 func (s *Server) cleanupStatus(w http.ResponseWriter, r *http.Request) {
@@ -222,9 +244,17 @@ func (s *Server) computeCleanupStatus(r *http.Request, template string) (*cleanu
 		if len(matched) > 0 {
 			sort.Strings(matched)
 			st.Deployed = true
-			st.Namespaces = matched
+			// Cap names retained in API responses for large runs (counts still exact).
+			if len(matched) > 40 {
+				st.Namespaces = append([]string(nil), matched[:40]...)
+			} else {
+				st.Namespaces = matched
+			}
 			st.Count = len(matched)
 			st.Label = "online"
+			if snap, err := cl.ListManaged(ctx, matchedRun); err == nil {
+				st.Objects = snapshotToObjectCounts(snap)
+			}
 		} else {
 			st.Label = "cleaned"
 		}
@@ -246,13 +276,34 @@ func (s *Server) computeCleanupStatus(r *http.Request, template string) (*cleanu
 		if tmpl == "" {
 			tmpl = histByRun[rid]
 		}
-		out.LiveRuns = append(out.LiveRuns, liveRunRow{
+		row := liveRunRow{
 			RunID: rid, Prefix: prefixForRun(rid), Template: tmpl,
-			Count: len(ns), Namespaces: ns,
-		})
+			Count: len(ns),
+		}
+		if len(ns) > 40 {
+			row.Namespaces = append([]string(nil), ns[:40]...)
+		} else {
+			row.Namespaces = ns
+		}
+		if snap, err := cl.ListManaged(ctx, rid); err == nil {
+			row.Objects = snapshotToObjectCounts(snap)
+		}
+		out.LiveRuns = append(out.LiveRuns, row)
 	}
 	sort.Slice(out.LiveRuns, func(i, j int) bool { return out.LiveRuns[i].RunID > out.LiveRuns[j].RunID })
 	return out, nil
+}
+
+func snapshotToObjectCounts(snap kube.Snapshot) *objectCounts {
+	return &objectCounts{
+		Namespaces:  snap.Namespaces,
+		Routes:      snap.Routes,
+		Services:    snap.Services,
+		Deployments: snap.Deployments,
+		Pods:        snap.Pods,
+		ReadyPods:   snap.ReadyPods,
+		PodPhases:   snap.PodPhases,
+	}
 }
 
 func runIDFromNS(name string) string {

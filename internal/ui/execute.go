@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -493,7 +494,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 		}
 	}
 
-	if !dryRun {
+	if !dryRun && !cfg.IsObjectPressure() {
 		_ = os.MkdirAll(kbDir, 0o755)
 		promURL, tokenFile := "", ""
 		if p, err := burner.DiscoverPrometheus(ctx, target.Kubeconfig, filepath.Join(kbDir, "prometheus.token")); err != nil {
@@ -544,6 +545,11 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 		}
 	}
 
+	if cfg.IsObjectPressure() {
+		s.executeObjectPressure(ctx, run, cfg, g, dryRun, target, kbDir, collected)
+		return
+	}
+
 	opts := runner.Options{
 		Cluster:      cl,
 		Config:       cfg,
@@ -566,6 +572,9 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			}
 			run.appendLog("info", string(phase), batch, msg)
 			run.mapPhase(phase, batch, msg)
+			if phase == runner.PhaseBatchMeasurement || phase == runner.PhaseFinalMeasurement || phase == runner.PhaseBatchStart {
+				run.logMem(batch, string(phase))
+			}
 			// OVN diagnoser: sample after each batch measurement + final (not kube-burner metrics).
 			if enableOVN && !dryRun && (phase == runner.PhaseBatchMeasurement || phase == runner.PhaseFinalMeasurement) {
 				if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil {
@@ -640,6 +649,116 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 	_ = writeApplyReport(s.RunDir, rep)
 }
 
+func (s *Server) executeObjectPressure(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun bool, target clusterTarget, kbDir, collected string) {
+	run.setStep("baseline", stepPassed, "object-pressure · kube-burner init")
+	run.appendLog("info", "APPLY", 0, "ObjectPressure basetype — kube-burner init (not client-go density apply)")
+	run.logMem(0, "object-pressure-start")
+	if dryRun {
+		run.appendLog("info", "APPLY", 0, "dry-run: would render init.yml and run kube-burner init")
+		run.mu.Lock()
+		run.Status = "passed"
+		run.mu.Unlock()
+		run.setStep("done", stepPassed, "dry-run complete")
+		return
+	}
+	cfg = filterPressureObjects(ctx, run, cfg, target)
+	if cfg == nil {
+		return
+	}
+	_ = os.MkdirAll(kbDir, 0o755)
+	files, err := burner.WriteDir(kbDir, cfg, g, "", "", collected)
+	if err != nil {
+		run.fail("baseline", "render object-pressure: "+err.Error())
+		return
+	}
+	bin, err := burner.FindBinary()
+	if err != nil {
+		run.fail("baseline", err.Error())
+		return
+	}
+	run.appendLog("info", "APPLY", 0, "kube-burner init -c "+files.InitConfig)
+	run.setStep("batch-1", stepRunning, "kube-burner init")
+	if err := burner.RunInit(ctx, bin, files.InitConfig, target.Kubeconfig, g.RunID); err != nil {
+		run.fail("batch-1", "kube-burner init: "+err.Error())
+		return
+	}
+	run.setStep("batch-1", stepPassed, "init complete")
+	run.logMem(0, "object-pressure-done")
+	if snap, err := func() (kube.Snapshot, error) {
+		cl, err := target.client(20, 40)
+		if err != nil {
+			return kube.Snapshot{}, err
+		}
+		return cl.ListManaged(ctx, g.RunID)
+	}(); err == nil {
+		run.appendLog("info", "STATE", 0, fmt.Sprintf("live after init · NS=%d routes=%d svcs=%d pods=%d/%d",
+			snap.Namespaces, snap.Routes, snap.Services, snap.ReadyPods, snap.Pods))
+	}
+	run.mu.Lock()
+	run.Status = "passed"
+	run.mu.Unlock()
+	run.setStep("done", stepPassed, "complete · open Report")
+}
+
+// filterPressureObjects drops unavailable optional GVKs (warn) and fails if a required GVK is missing.
+func filterPressureObjects(ctx context.Context, run *execRun, cfg *config.Config, target clusterTarget) *config.Config {
+	cl, err := target.client(20, 40)
+	if err != nil {
+		run.fail("baseline", "object-pressure client: "+err.Error())
+		return nil
+	}
+	live, ok := cl.(*kube.Live)
+	if !ok || live == nil {
+		run.appendLog("warn", "APPLY", 0, "object-pressure: no Live discovery client — skipping GVK availability checks")
+		return cfg
+	}
+	cp := *cfg
+	cp.Topology.Objects = append([]config.PressureObject(nil), cfg.Topology.Objects...)
+	var kept []config.PressureObject
+	for _, o := range cp.Topology.Objects {
+		if !o.Enabled {
+			kept = append(kept, o)
+			continue
+		}
+		ok, err := live.HasAPIResource(ctx, o.APIVersion, o.Kind)
+		if err != nil {
+			run.appendLog("warn", "APPLY", 0, fmt.Sprintf("GVK check %s/%s: %v", o.APIVersion, o.Kind, err))
+			if o.Required {
+				run.fail("baseline", fmt.Sprintf("required object %s (%s/%s): discovery failed: %v", o.ID, o.APIVersion, o.Kind, err))
+				return nil
+			}
+			run.appendLog("warn", "APPLY", 0, fmt.Sprintf("skipping %s — discovery error", o.ID))
+			o.Enabled = false
+			kept = append(kept, o)
+			continue
+		}
+		if !ok {
+			msg := fmt.Sprintf("API %s kind %s not served — skipping %s", o.APIVersion, o.Kind, o.ID)
+			if o.Required {
+				run.fail("baseline", "required object missing on cluster: "+msg)
+				return nil
+			}
+			run.appendLog("warn", "APPLY", 0, msg)
+			o.Enabled = false
+			kept = append(kept, o)
+			continue
+		}
+		kept = append(kept, o)
+	}
+	cp.Topology.Objects = kept
+	enabled := 0
+	for _, o := range kept {
+		if o.Enabled {
+			enabled++
+		}
+	}
+	if enabled < 1 {
+		run.fail("baseline", "object-pressure: no enabled objects remain after GVK checks")
+		return nil
+	}
+	return &cp
+}
+
 func writeApplyReport(runDir string, rep *runner.Report) error {
 	if rep == nil {
 		return nil
@@ -664,14 +783,26 @@ func (r *execRun) snapshot() *execRun {
 func (r *execRun) appendLog(level, phase string, batch int, msg string) {
 	r.mu.Lock()
 	r.Logs = append(r.Logs, logLine{At: time.Now(), Level: level, Phase: phase, Batch: batch, Message: msg})
-	if len(r.Logs) > 2000 {
-		r.Logs = r.Logs[len(r.Logs)-2000:]
+	const maxLogs = 800
+	if len(r.Logs) > maxLogs {
+		r.Logs = r.Logs[len(r.Logs)-maxLogs:]
 	}
 	cb := r.onChange
 	r.mu.Unlock()
 	if cb != nil {
 		cb()
 	}
+}
+
+func (r *execRun) logMem(batch int, where string) {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	r.appendLog("info", "MEM", batch, fmt.Sprintf("%s · alloc=%.1fMi heapInuse=%.1fMi sys=%.1fMi goroutines=%d",
+		where,
+		float64(ms.Alloc)/(1024*1024),
+		float64(ms.HeapInuse)/(1024*1024),
+		float64(ms.Sys)/(1024*1024),
+		runtime.NumGoroutine()))
 }
 
 func (r *execRun) setStep(id string, st stepStatus, msg string) {

@@ -151,7 +151,13 @@ func (l *Live) ListManaged(ctx context.Context, runID string) (Snapshot, error) 
 		return snap, fmt.Errorf("list pods: %w", err)
 	}
 	snap.Pods = len(podList.Items)
+	snap.PodPhases = map[string]int{}
 	for _, p := range podList.Items {
+		phase := string(p.Status.Phase)
+		if phase == "" {
+			phase = "Unknown"
+		}
+		snap.PodPhases[phase]++
 		if podReady(p) {
 			snap.ReadyPods++
 		}
@@ -176,6 +182,32 @@ func (l *Live) HasRouteAPI(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+// HasAPIResource reports whether apiVersion/kind is served by the apiserver.
+// Used by ObjectPressure to skip optional CRDs (e.g. EgressFirewall) with a warn.
+func (l *Live) HasAPIResource(ctx context.Context, apiVersion, kind string) (bool, error) {
+	if l == nil || l.cs == nil {
+		return false, fmt.Errorf("nil live client")
+	}
+	gv, err := schema.ParseGroupVersion(apiVersion)
+	if err != nil {
+		return false, err
+	}
+	_ = ctx
+	lists, err := l.cs.Discovery().ServerResourcesForGroupVersion(gv.String())
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, r := range lists.APIResources {
+		if r.Kind == kind {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (l *Live) ServerVersion(ctx context.Context) (string, error) {

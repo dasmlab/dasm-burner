@@ -19,11 +19,13 @@ var templateNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 type templateMeta struct {
 	Name                 string    `json:"name"`
 	Description          string    `json:"description,omitempty"`
+	Kind                 string    `json:"kind,omitempty"`
 	Namespaces           int       `json:"namespaces"`
 	RoutesPerNamespace   int       `json:"routesPerNamespace"`
 	ServicesPerNamespace int       `json:"servicesPerNamespace"`
 	ReplicasPerService   int       `json:"replicasPerService"`
 	RouteToService       string    `json:"routeToService"`
+	Objects              any       `json:"objects,omitempty"`
 	Counts               any       `json:"counts,omitempty"`
 	UpdatedAt            time.Time `json:"updatedAt"`
 	Active               bool      `json:"active,omitempty"`
@@ -109,14 +111,16 @@ func (s *Server) templateByName(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name                 string `json:"name"`
-		SaveAs               string `json:"saveAs"` // optional new name (Save As)
-		Description          string `json:"description"`
-		Namespaces           int    `json:"namespaces"`
-		RoutesPerNamespace   int    `json:"routesPerNamespace"`
-		ServicesPerNamespace int    `json:"servicesPerNamespace"`
-		ReplicasPerService   int    `json:"replicasPerService"`
-		RouteToService       string `json:"routeToService"`
+		Name                 string                 `json:"name"`
+		SaveAs               string                 `json:"saveAs"`
+		Description          string                 `json:"description"`
+		Kind                 string                 `json:"kind"`
+		Namespaces           int                    `json:"namespaces"`
+		RoutesPerNamespace   int                    `json:"routesPerNamespace"`
+		ServicesPerNamespace int                    `json:"servicesPerNamespace"`
+		ReplicasPerService   int                    `json:"replicasPerService"`
+		RouteToService       string                 `json:"routeToService"`
+		Objects              []config.PressureObject `json:"objects"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -133,6 +137,16 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.cfg()
 	if err != nil {
 		cfg = config.StartingTemplate()
+	}
+	if body.Kind == config.KindObjectPressure {
+		cfg = config.StartingObjectPressure()
+	} else if body.Kind == config.Kind || body.Kind == "" {
+		if cfg.IsObjectPressure() && body.Kind == config.Kind {
+			cfg = config.StartingTemplate()
+		}
+	}
+	if body.Kind != "" {
+		cfg.Kind = body.Kind
 	}
 	cfg.Metadata.Name = name
 	if body.Description != "" {
@@ -153,6 +167,10 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	if body.RouteToService != "" {
 		cfg.Topology.Relationships.RouteToService = body.RouteToService
 	}
+	if body.Objects != nil {
+		cfg.Topology.Objects = body.Objects
+	}
+	config.ApplyDefaults(cfg)
 	if err := config.Validate(cfg); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -207,11 +225,13 @@ func (s *Server) listTemplates() []templateMeta {
 		out = append(out, templateMeta{
 			Name:                 name,
 			Description:          cfg.Metadata.Description,
+			Kind:                 cfg.Kind,
 			Namespaces:           cfg.Topology.Namespaces.Count,
 			RoutesPerNamespace:   cfg.Topology.Routes.PerNamespace,
 			ServicesPerNamespace: cfg.Topology.Services.PerNamespace,
 			ReplicasPerService:   cfg.Topology.Workloads.ReplicasPerService,
 			RouteToService:       cfg.Topology.Relationships.RouteToService,
+			Objects:              cfg.Topology.Objects,
 			Counts:               cfg.Counts(),
 			UpdatedAt:            updated,
 			Active:               name == active,
@@ -225,18 +245,20 @@ func (s *Server) listTemplates() []templateMeta {
 
 func (s *Server) ensureDefaultTemplates() {
 	dir := s.templatesDir()
-	smoke := filepath.Join(dir, "smoke.yaml")
-	if _, err := os.Stat(smoke); err == nil {
-		if s.activeTemplateName() == "" {
-			s.setActiveTemplate("smoke")
+	writeIfMissing := func(name string, cfg *config.Config) {
+		path := filepath.Join(dir, name+".yaml")
+		if _, err := os.Stat(path); err == nil {
+			return
 		}
-		return
+		raw, err := cfg.Marshal()
+		if err != nil {
+			return
+		}
+		_ = os.WriteFile(path, raw, 0o644)
 	}
-	cfg := config.StartingTemplate()
-	raw, err := cfg.Marshal()
-	if err != nil {
-		return
+	writeIfMissing("smoke", config.StartingTemplate())
+	writeIfMissing("object-pressure", config.StartingObjectPressure())
+	if s.activeTemplateName() == "" {
+		s.setActiveTemplate("smoke")
 	}
-	_ = os.WriteFile(smoke, raw, 0o644)
-	s.setActiveTemplate("smoke")
 }

@@ -69,6 +69,10 @@ func Generate(cfg *config.Config) (*Graph, error) {
 	nsCount := cfg.Topology.Namespaces.Count
 	pairsPerNS := cfg.Topology.Services.PerNamespace
 	replicas := cfg.Topology.Workloads.ReplicasPerService
+	// ObjectPressure creates namespaces via kube-burner init; graph only needs NS count + RunID.
+	if cfg.IsObjectPressure() {
+		pairsPerNS = 0
+	}
 
 	globalPair := 0
 	for i := 1; i <= nsCount; i++ {

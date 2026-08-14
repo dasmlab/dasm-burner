@@ -5,9 +5,8 @@
         <div class="dasm-caps">Starting template</div>
         <h1 class="dasm-title">Compact topology</h1>
         <p class="dasm-subtitle">
-          One Namespace box with an instance count — not 2,500 boxes.
-          Pick a saved template, edit counts, then <strong>Save</strong> or
-          <strong>Save as</strong>. Execute only lists saved templates.
+          Density (Route→Service→Pod) or ObjectPressure (ConfigMaps/Secrets/CRDs via kube-burner init).
+          One Namespace box with instance counts — not N drawn namespaces.
         </p>
       </div>
     </div>
@@ -16,7 +15,7 @@
 
     <div class="dasm-panel q-mb-md">
       <div class="row items-end q-col-gutter-md">
-        <div class="col-12 col-md-5">
+        <div class="col-12 col-md-4">
           <q-select
             v-model="activeName"
             :options="templateOptions"
@@ -29,7 +28,19 @@
           />
         </div>
         <div class="col-12 col-md-3">
-          <q-input v-model="saveAsName" dense outlined label="Save as (optional new name)" />
+          <q-select
+            v-model="model.kind"
+            :options="kindOptions"
+            label="Basetype"
+            dense
+            outlined
+            emit-value
+            map-options
+            @update:model-value="onKindChange"
+          />
+        </div>
+        <div class="col-12 col-md-2">
+          <q-input v-model="saveAsName" dense outlined label="Save as (optional)" />
         </div>
         <div class="col-auto">
           <q-btn color="primary" unelevated label="Save" :loading="saving" @click="save(false)" />
@@ -45,10 +56,10 @@
 
     <div class="row q-col-gutter-md">
       <div class="col-12 col-md-2">
-        <div class="dasm-panel">
+        <div class="dasm-panel" v-if="!isPressure">
           <div class="dasm-stat-label q-mb-sm">Palette</div>
           <div
-            v-for="p in palette"
+            v-for="p in densityPalette"
             :key="p.kind"
             class="palette-item"
             draggable="true"
@@ -62,6 +73,27 @@
             </div>
           </div>
         </div>
+        <div class="dasm-panel" v-else>
+          <div class="dasm-stat-label q-mb-sm">Object kinds</div>
+          <div v-for="o in model.objects" :key="o.id" class="q-mb-sm">
+            <q-toggle v-model="o.enabled" :label="o.kind || o.id" dense />
+            <q-input
+              v-if="o.enabled"
+              v-model.number="o.replicasPerNamespace"
+              type="number"
+              min="1"
+              dense
+              outlined
+              label="replicas / NS"
+              class="q-mt-xs"
+            />
+          </div>
+          <q-separator class="q-my-sm" />
+          <div class="dasm-stat-label q-mb-xs">+ Add Custom</div>
+          <q-input v-model="customGVK" dense outlined label="apiVersion/Kind" class="q-mb-xs" hint="e.g. example.com/v1/Widget" />
+          <q-input v-model.number="customReplicas" type="number" min="1" dense outlined label="replicas / NS" class="q-mb-xs" />
+          <q-btn outline color="primary" dense label="Add custom" class="full-width" @click="addCustom" />
+        </div>
       </div>
       <div class="col-12 col-md-7">
         <TopologyCanvas :model="model" :selected="selected" @select="selected = $event" @drop="onDropKind" />
@@ -71,18 +103,42 @@
           <div class="dasm-stat-label q-mb-sm">Instances</div>
           <q-input v-model="model.name" label="Name" dense outlined class="q-mb-sm" />
           <q-input v-model.number="model.namespaces" type="number" min="1" label="Namespaces" dense outlined class="q-mb-sm" />
-          <q-input v-model.number="model.routesPerNamespace" type="number" min="1" label="Routes per NS" dense outlined class="q-mb-sm" />
-          <q-input v-model.number="model.servicesPerNamespace" type="number" min="1" label="Services per NS" dense outlined class="q-mb-sm" />
-          <q-input v-model.number="model.replicasPerService" type="number" min="1" label="Pods per service" dense outlined class="q-mb-sm" />
-          <q-select
-            v-model="model.routeToService"
-            :options="relOptions"
-            label="Route → Service"
-            dense
-            outlined
-            emit-value
-            map-options
-          />
+          <template v-if="!isPressure">
+            <q-input v-model.number="model.routesPerNamespace" type="number" min="1" label="Routes per NS" dense outlined class="q-mb-sm" />
+            <q-input v-model.number="model.servicesPerNamespace" type="number" min="1" label="Services per NS" dense outlined class="q-mb-sm" />
+            <q-input v-model.number="model.replicasPerService" type="number" min="1" label="Pods per service" dense outlined class="q-mb-sm" />
+            <q-select
+              v-model="model.routeToService"
+              :options="relOptions"
+              label="Route → Service"
+              dense
+              outlined
+              emit-value
+              map-options
+            />
+          </template>
+          <template v-else>
+            <div class="text-caption text-grey-7">
+              Apply path: <strong>kube-burner init</strong>. Missing CRDs are skipped with a warning unless marked required.
+            </div>
+            <div v-if="selectedObj" class="q-mt-md">
+              <div class="dasm-stat-label">Selected · {{ selectedObj.id }}</div>
+              <q-input v-model="selectedObj.apiVersion" dense outlined label="apiVersion" class="q-mb-xs" />
+              <q-input v-model="selectedObj.kind" dense outlined label="kind" class="q-mb-xs" />
+              <q-toggle v-model="selectedObj.required" label="Required (fail if CRD missing)" dense />
+              <q-input
+                v-if="selectedObj.custom"
+                v-model="selectedObj.inlineYAML"
+                type="textarea"
+                autogrow
+                dense
+                outlined
+                label="inline YAML (optional)"
+                class="q-mt-xs"
+              />
+              <q-btn flat dense color="negative" label="Remove" v-if="selectedObj.custom" @click="removeSelected" />
+            </div>
+          </template>
         </div>
       </div>
     </div>
@@ -123,19 +179,28 @@ const selected = ref('ns')
 const activeName = ref('')
 const saveAsName = ref('')
 const templates = ref([])
+const customGVK = ref('')
+const customReplicas = ref(5)
 const iterationVar = '{{.Iteration}}'
 const replicaVar = '{{.Replica}}'
 const model = reactive({
   name: 'smoke',
+  kind: 'OpenShiftNetworkDensity',
   namespaces: 2,
   routesPerNamespace: 2,
   servicesPerNamespace: 2,
   replicasPerService: 3,
   routeToService: 'oneToOne',
+  objects: [],
   counts: {},
 })
 
-const palette = [
+const kindOptions = [
+  { label: 'OpenShiftNetworkDensity (Route→Service→Pod)', value: 'OpenShiftNetworkDensity' },
+  { label: 'OpenShiftObjectPressure (CRDs / small objects)', value: 'OpenShiftObjectPressure' },
+]
+
+const densityPalette = [
   { kind: 'ns', label: 'Namespace', icon: 'folder', hint: 'container × N' },
   { kind: 'route', label: 'Route', icon: 'alt_route', hint: 'per namespace' },
   { kind: 'service', label: 'Service', icon: 'hub', hint: 'per namespace' },
@@ -149,15 +214,28 @@ const relOptions = [
   { label: 'manyToOne (later)', value: 'manyToOne', disable: true },
 ]
 
+const isPressure = computed(() => model.kind === 'OpenShiftObjectPressure')
+const selectedObj = computed(() => (model.objects || []).find((o) => o.id === selected.value) || null)
+
 const templateOptions = computed(() =>
   templates.value.map((t) => ({
-    label: `${t.name} · ${t.namespaces} NS · ${t.counts?.pods ?? '?'} pods`,
+    label: `${t.name} · ${t.kind === 'OpenShiftObjectPressure' ? 'pressure' : 'density'} · ${t.namespaces} NS`,
     value: t.name,
   })),
 )
 
 const counts = computed(() => {
   const c = model.counts || {}
+  if (isPressure.value) {
+    const enabled = (model.objects || []).filter((o) => o.enabled)
+    const objs = enabled.reduce((a, o) => a + model.namespaces * (o.replicasPerNamespace || 0), 0)
+    return [
+      { label: 'Namespaces', value: model.namespaces },
+      { label: 'Enabled kinds', value: enabled.length },
+      { label: 'Objects', value: objs },
+      { label: 'Intended', value: (c.intendedObjects ?? model.namespaces + objs) },
+    ]
+  }
   return [
     { label: 'Namespaces', value: c.namespaces ?? model.namespaces },
     { label: 'Routes', value: c.routes ?? model.namespaces * model.routesPerNamespace },
@@ -166,7 +244,21 @@ const counts = computed(() => {
   ]
 })
 
-const mapping = computed(() => `global:
+const mapping = computed(() => {
+  if (isPressure.value) {
+    const lines = (model.objects || [])
+      .filter((o) => o.enabled)
+      .map((o) => `      - ${o.kind} replicas: ${o.replicasPerNamespace}`)
+      .join('\n')
+    return `jobs:
+  - name: object-pressure
+    jobIterations: ${model.namespaces}
+    namespacedIterations: true
+    # apply: kube-burner init
+    objects:
+${lines || '      # none enabled'}`
+  }
+  return `global:
   measurements: [podLatency, serviceLatency]
 jobs:
   - name: route-service-density
@@ -178,18 +270,41 @@ jobs:
       - objectTemplate: objectTemplates/deployment.yml replicas: ${model.servicesPerNamespace}
         # spec.replicas: ${model.replicasPerService}
     # templates use ${iterationVar} / ${replicaVar}
-    # relation: ${model.routeToService}`)
+    # relation: ${model.routeToService}`
+})
+
+const defaultPressureObjects = () => ([
+  { id: 'configmap', enabled: true, apiVersion: 'v1', kind: 'ConfigMap', replicasPerNamespace: 10, templateRef: 'configmap' },
+  { id: 'secret', enabled: true, apiVersion: 'v1', kind: 'Secret', replicasPerNamespace: 10, templateRef: 'secret' },
+  { id: 'serviceaccount', enabled: true, apiVersion: 'v1', kind: 'ServiceAccount', replicasPerNamespace: 5, templateRef: 'serviceaccount' },
+  { id: 'rolebinding', enabled: true, apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'RoleBinding', replicasPerNamespace: 5, templateRef: 'rolebinding' },
+  { id: 'networkpolicy', enabled: false, apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', replicasPerNamespace: 2, templateRef: 'networkpolicy' },
+  { id: 'limitrange', enabled: false, apiVersion: 'v1', kind: 'LimitRange', replicasPerNamespace: 1, templateRef: 'limitrange' },
+  { id: 'resourcequota', enabled: false, apiVersion: 'v1', kind: 'ResourceQuota', replicasPerNamespace: 1, templateRef: 'resourcequota' },
+  { id: 'egressfirewall', enabled: false, apiVersion: 'k8s.ovn.org/v1', kind: 'EgressFirewall', replicasPerNamespace: 1, templateRef: 'egressfirewall' },
+])
 
 function applyTopo(t) {
   Object.assign(model, {
     name: t.name,
+    kind: t.kind || 'OpenShiftNetworkDensity',
     namespaces: t.namespaces,
     routesPerNamespace: t.routesPerNamespace,
     servicesPerNamespace: t.servicesPerNamespace,
     replicasPerService: t.replicasPerService,
     routeToService: t.routeToService,
+    objects: t.objects?.length ? structuredClone(t.objects) : (t.kind === 'OpenShiftObjectPressure' ? defaultPressureObjects() : []),
     counts: t.counts || {},
   })
+}
+
+function onKindChange(kind) {
+  if (kind === 'OpenShiftObjectPressure') {
+    model.name = model.name === 'smoke' ? 'object-pressure' : model.name
+    if (!model.objects?.length) model.objects = defaultPressureObjects()
+  } else if (!model.objects) {
+    model.objects = []
+  }
 }
 
 function onDrag(ev, kind) {
@@ -197,6 +312,7 @@ function onDrag(ev, kind) {
 }
 
 function onDropKind(kind) {
+  if (isPressure.value) return
   if (kind === 'ns') {
     if (model.namespaces < 1) model.namespaces = 2
     selected.value = 'ns'
@@ -225,6 +341,40 @@ function onDropKind(kind) {
     model.routesPerNamespace = n
     model.servicesPerNamespace = n
   }
+}
+
+function addCustom() {
+  const raw = (customGVK.value || '').trim()
+  if (!raw) {
+    error.value = 'Enter apiVersion/Kind (e.g. example.com/v1/Widget)'
+    return
+  }
+  const parts = raw.split('/').filter(Boolean)
+  if (parts.length < 2) {
+    error.value = 'Custom GVK needs at least group/version/kind or v1/Kind'
+    return
+  }
+  const kind = parts[parts.length - 1]
+  const apiVersion = parts.slice(0, -1).join('/')
+  const id = `custom-${kind.toLowerCase()}-${Date.now().toString(36)}`
+  model.objects.push({
+    id,
+    enabled: true,
+    custom: true,
+    apiVersion,
+    kind,
+    replicasPerNamespace: Number(customReplicas.value) || 1,
+    inlineYAML: '',
+  })
+  selected.value = id
+  customGVK.value = ''
+  error.value = ''
+}
+
+function removeSelected() {
+  if (!selectedObj.value?.custom) return
+  model.objects = model.objects.filter((o) => o.id !== selectedObj.value.id)
+  selected.value = 'ns'
 }
 
 async function refreshTemplates() {
@@ -264,11 +414,13 @@ async function save(asNew) {
   try {
     const body = {
       name: model.name || activeName.value || 'smoke',
+      kind: model.kind,
       namespaces: Number(model.namespaces),
       routesPerNamespace: Number(model.routesPerNamespace),
       servicesPerNamespace: Number(model.servicesPerNamespace),
       replicasPerService: Number(model.replicasPerService),
       routeToService: model.routeToService,
+      objects: model.objects || [],
     }
     if (asNew) {
       body.saveAs = (saveAsName.value || model.name || '').trim()

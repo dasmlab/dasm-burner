@@ -26,7 +26,9 @@ We configure kube-burner as a **local indexer** per run (not Elastic/OpenSearch;
 | UI Execute | Real (non–dry-run) runs DiscoverPrometheus → measure → index → check-alerts before snapshot freeze |
 | Snapshot | `reports/<id>/` includes `snapshot.json`, `metrics/*.json`, tarball copy |
 | Report UI | Open/Close, OVN pods table with **restart Δ vs open**, jobSummary, metric cards, alerts |
-| Unused | elastic/opensearch, tsdb, `kube-burner import`, churn |
+| Control-plane pod | Live+preview: requests `256Mi`, limits **`1Gi`** (was 256Mi/512Mi — OOMKilled on smoke2500+) |
+| ObjectPressure | Basetype `OpenShiftObjectPressure`: render `init.yml` + `objectTemplates/` via `internal/burner/pressure.go`; live apply is **`kube-burner init`** (density stays client-go) |
+| Unused | elastic/opensearch, tsdb, `kube-burner import`, churn (except ObjectPressure `init`) |
 
 Cleanup (product, not kube-burner): async background delete with wait scaled `15m + 5s*NS` (cap 45m), **not** tied to HTTP/`r.Context()` (avoids OCP route ~30s cancel).
 
@@ -90,7 +92,7 @@ metadata:
 | kube-burner | dasm-burner |
 |-------------|-------------|
 | Object templates *would* name resources with `{{.Iteration}}` / `{{.Replica}}` | We generate a fully named graph (`kb-{runID}-{kind}-{seq:05d}-{sfx}`) so apply and measure share labels |
-| Jobs / objects schema | Compact `OpenShiftNetworkDensity` YAML + canvas (NS × N). This is the only extra schema; it **projects into** kube-burner YAML |
+| Jobs / objects schema | Compact `OpenShiftNetworkDensity` (Route→Service→Pod) or `OpenShiftObjectPressure` (object palette) YAML + canvas. Both **project into** kube-burner YAML |
 
 We do not draw N namespace boxes. The canvas is the starting template (2 NS × 2 pairs × 3 pods) with instance counts.
 
@@ -98,12 +100,12 @@ We do not draw N namespace boxes. The canvas is the starting template (2 NS × 2
 
 | kube-burner | dasm-burner |
 |-------------|-------------|
-| `kube-burner init -c init.yml` can Create at QPS with waiters, churn, hooks, `deletionStrategy` | **We do not call `init` for apply.** client-go owns sequential / batch / rate, readiness, and cleanup |
-| `global.gc`, `waitWhenFinished` | Rendered into `init.yml` for anyone who wants to run it by hand; live path is still Phase 2 |
+| `kube-burner init -c init.yml` can Create at QPS with waiters, churn, hooks, `deletionStrategy` | **Density (`OpenShiftNetworkDensity`):** we do **not** call `init` for apply. client-go owns sequential / batch / rate, readiness, and cleanup. **ObjectPressure (`OpenShiftObjectPressure`):** live apply **does** run `kube-burner init` from rendered `init.yml` + `objectTemplates/` (stock palette + custom GVK; missing optional CRDs skipped with warn) |
+| `global.gc`, `waitWhenFinished` | Density: rendered for hand-runs. ObjectPressure: consumed by live `init` |
 
-Why apply is ours: OpenShift Routes, SCC (`runAsNonRoot`, drop ALL, no `runAsUser: 65532` on workload NS), pull-secret copy, `--allow-large` / `--i-understand-this-loads-the-control-plane`, and abort gates between batches. Those are product rules, not missing kube-burner features.
+Why density apply is ours: OpenShift Routes, SCC (`runAsNonRoot`, drop ALL, no `runAsUser: 65532` on workload NS), pull-secret copy, `--allow-large` / `--i-understand-this-loads-the-control-plane`, and abort gates between batches. Those are product rules, not missing kube-burner features.
 
-`render-kube-burner` still writes a complete `init.yml` so we stay honest about the mapping.
+`render-kube-burner` / Topology preview still writes a complete `init.yml` for both basetypes.
 
 ### Phase 3 — Measure / index / alerts
 
@@ -121,7 +123,7 @@ Not used (yet), and why:
 
 | Upstream feature | Why unused |
 |------------------|------------|
-| `kube-burner init` as the apply engine | Phase 2 owns OpenShift-safe apply |
+| `kube-burner init` as the apply engine | Density: Phase 2 owns OpenShift-safe apply. ObjectPressure: **uses** `init` |
 | Churn / jobPause / hooks | Density curve is a controlled apply, not churn |
 | Elasticsearch indexer | Local indexer + tarball + `dasm-burner report` |
 | TSDB indexer | Deferred (Phase B); local JSON is enough for OVN report cards |

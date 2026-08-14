@@ -45,11 +45,18 @@
             @update:model-value="onTemplate"
           />
           <div v-if="selectedMeta" class="text-caption text-grey-7 q-mt-sm">
-            {{ selectedMeta.namespaces }} NS ·
-            {{ selectedMeta.routesPerNamespace }} routes ·
-            {{ selectedMeta.servicesPerNamespace }} services ·
-            {{ selectedMeta.replicasPerService }} pods/svc
-            <span v-if="selectedMeta.counts"> · {{ selectedMeta.counts.pods }} pods total</span>
+            <template v-if="selectedMeta.kind === 'OpenShiftObjectPressure'">
+              ObjectPressure · {{ selectedMeta.namespaces }} NS ·
+              {{ (selectedMeta.objects || []).filter((o) => o.enabled).length }} kinds ·
+              {{ selectedMeta.counts?.intendedObjects ?? '?' }} intended objects
+            </template>
+            <template v-else>
+              {{ selectedMeta.namespaces }} NS ·
+              {{ selectedMeta.routesPerNamespace }} routes ·
+              {{ selectedMeta.servicesPerNamespace }} services ·
+              {{ selectedMeta.replicasPerService }} pods/svc
+              <span v-if="selectedMeta.counts"> · {{ selectedMeta.counts.pods }} pods total</span>
+            </template>
           </div>
           <div class="row items-center q-gutter-sm q-mt-md">
             <q-chip
@@ -77,6 +84,7 @@
           <div class="text-caption text-grey-7 q-mt-xs">
             State is live for <strong>{{ cluster.currentLabel.value }}</strong> only — flip clusters and refresh.
           </div>
+          <div v-if="deployObjectsCaption" class="text-caption text-grey-7 q-mt-xs">{{ deployObjectsCaption }}</div>
         </div>
       </div>
       <div class="col-12 col-md-4">
@@ -382,10 +390,18 @@ let timer = null
 let cleanupPoll = null
 
 const templateOptions = computed(() =>
-  templates.value.map((t) => ({
-    label: `${t.name} · ${t.namespaces} NS · ${t.counts?.pods ?? '?'} pods`,
-    value: t.name,
-  })),
+  templates.value.map((t) => {
+    if (t.kind === 'OpenShiftObjectPressure') {
+      return {
+        label: `${t.name} · pressure · ${t.namespaces} NS · ${t.counts?.intendedObjects ?? '?'} objs`,
+        value: t.name,
+      }
+    }
+    return {
+      label: `${t.name} · ${t.namespaces} NS · ${t.counts?.pods ?? '?'} pods`,
+      value: t.name,
+    }
+  }),
 )
 const selectedMeta = computed(() => templates.value.find((t) => t.name === templateName.value))
 const steps = computed(() => run.value?.steps || [])
@@ -411,12 +427,23 @@ const deployLabel = computed(() => {
   const on = deployCluster.value || cluster.currentLabel.value
   if (deploy.value.deployed) {
     const n = deploy.value.count || 0
+    const o = deploy.value.objects
+    if (o) {
+      return `online on ${on} (${n} NS · ${o.routes ?? 0} rt · ${o.services ?? 0} svc · ${o.readyPods ?? 0}/${o.pods ?? 0} pods)`
+    }
     return `online on ${on} (${n} NS)`
   }
   if (managedTotal.value > 0) {
     return `no NS for this template on ${on} · ${managedTotal.value} other managed NS live`
   }
   return `cleaned on ${on}`
+})
+const deployObjectsCaption = computed(() => {
+  const o = deploy.value?.objects
+  if (!o || !deploy.value?.deployed) return ''
+  const phases = o.podPhases || {}
+  const bits = Object.keys(phases).sort().map((k) => `${k}=${phases[k]}`)
+  return bits.length ? `Pod phases: ${bits.join(' · ')}` : ''
 })
 const deployChipColor = computed(() => {
   if (deployOnline.value) return 'warning'

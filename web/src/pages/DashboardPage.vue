@@ -196,7 +196,12 @@
           >
             <div class="mix-card__title">{{ t.name }}</div>
             <div class="mix-card__meta">
-              {{ t.namespaces }} NS · {{ t.counts?.pods ?? '?' }} pods
+              <template v-if="t.kind === 'OpenShiftObjectPressure'">
+                pressure · {{ t.namespaces }} NS · {{ t.counts?.intendedObjects ?? '?' }} objs
+              </template>
+              <template v-else>
+                {{ t.namespaces }} NS · {{ t.counts?.pods ?? '?' }} pods
+              </template>
               <span v-if="t.name === activeTemplate"> · active</span>
             </div>
             <div class="mix-card__actions">
@@ -222,6 +227,9 @@
             <div class="mix-card__title text-mono">{{ row.prefix || `kb-${row.runId}` }}</div>
             <div class="mix-card__meta">
               {{ row.template || 'unknown template' }} · {{ row.count }} NS
+              <span v-if="row.objects">
+                · {{ row.objects.routes ?? 0 }} rt · {{ row.objects.services ?? 0 }} svc · {{ row.objects.readyPods ?? 0 }}/{{ row.objects.pods ?? 0 }} pods
+              </span>
             </div>
             <div class="mix-card__actions">
               <q-btn flat dense size="sm" color="warning" icon="delete_sweep" label="Cleanup" :to="{ name: 'execute' }" />

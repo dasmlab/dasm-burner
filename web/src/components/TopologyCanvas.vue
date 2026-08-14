@@ -33,7 +33,7 @@
         />
         <text :x="ns.x + 18" :y="ns.y + 28" class="box-title">Namespace</text>
         <text :x="ns.x + ns.w - 18" :y="ns.y + 28" text-anchor="end" class="box-count">× {{ model.namespaces }}</text>
-        <text :x="ns.x + 18" :y="ns.y + 48" class="box-sub">kube-burner jobIterations · namespacedIterations</text>
+        <text :x="ns.x + 18" :y="ns.y + 48" class="box-sub">{{ nsSubtitle }}</text>
       </g>
 
       <path v-for="e in edges" :key="e.id" :d="e.d" class="link" fill="none" marker-end="url(#arrow)" />
@@ -45,7 +45,7 @@
           :width="n.w"
           :height="n.h"
           rx="12"
-          :class="['box-inner', n.cls, { active: selected === n.id }]"
+          :class="['box-inner', n.cls, { active: selected === n.id, dim: n.dim }]"
         />
         <text :x="n.x + 14" :y="n.y + 26" class="inner-title">{{ n.label }}</text>
         <text :x="n.x + n.w - 14" :y="n.y + 26" text-anchor="end" class="inner-count">× {{ n.count }}</text>
@@ -70,8 +70,34 @@ const vbW = 920
 const vbH = 420
 const ns = { x: 28, y: 28, w: 864, h: 364 }
 
+const isPressure = computed(() => props.model.kind === 'OpenShiftObjectPressure')
+const nsSubtitle = computed(() =>
+  isPressure.value
+    ? 'kube-burner jobIterations · object-pressure init'
+    : 'kube-burner jobIterations · namespacedIterations',
+)
+
 const inner = computed(() => {
   if (props.model.namespaces < 1) return []
+  if (isPressure.value) {
+    const objs = (props.model.objects || []).filter((o) => o.enabled)
+    return objs.map((o, i) => {
+      const col = i % 3
+      const row = Math.floor(i / 3)
+      return {
+        id: o.id,
+        label: o.kind || o.id,
+        count: o.replicasPerNamespace || 1,
+        sub: o.custom ? 'custom GVK' : (o.apiVersion || ''),
+        cls: o.custom ? 'is-custom' : 'is-pressure',
+        dim: false,
+        x: 72 + col * 270,
+        y: 100 + row * 90,
+        w: 250,
+        h: 72,
+      }
+    })
+  }
   return [
     {
       id: 'route',
@@ -110,6 +136,7 @@ const inner = computed(() => {
 })
 
 const edges = computed(() => {
+  if (isPressure.value) return []
   const nodes = inner.value
   if (nodes.length < 3) return []
   const a = nodes[0]
@@ -167,6 +194,9 @@ function onDrop(ev) {
 .is-route { fill: #976eb0; }
 .is-svc { fill: #2f8f7d; }
 .is-pod { fill: #70835a; }
+.is-pressure { fill: #3d6b8a; }
+.is-custom { fill: #b07a3d; }
+.dim { opacity: 0.45; }
 .active {
   stroke: #1d2b36;
   stroke-width: 3;

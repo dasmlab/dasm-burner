@@ -11,6 +11,7 @@ import (
 const (
 	APIVersion = "benchmark.dasmlab.org/v1"
 	Kind       = "OpenShiftNetworkDensity"
+	KindObjectPressure = "OpenShiftObjectPressure"
 
 	RelOneToOne  = "oneToOne"
 	RelOneToMany = "oneToMany"
@@ -52,6 +53,22 @@ type Topology struct {
 	Routes        CountPerNS       `yaml:"routes"`
 	Workloads     WorkloadSpec     `yaml:"workloads"`
 	Relationships RelationshipSpec `yaml:"relationships"`
+	// Objects is used by OpenShiftObjectPressure (kube-burner objectTemplates).
+	Objects []PressureObject `yaml:"objects,omitempty" json:"objects,omitempty"`
+}
+
+// PressureObject is one enabled kind (stock or custom) for ObjectPressure runs.
+type PressureObject struct {
+	ID             string `yaml:"id" json:"id"`
+	Enabled        bool   `yaml:"enabled" json:"enabled"`
+	APIVersion     string `yaml:"apiVersion" json:"apiVersion"`
+	Kind           string `yaml:"kind" json:"kind"`
+	ReplicasPerNS  int    `yaml:"replicasPerNamespace" json:"replicasPerNamespace"`
+	Required       bool   `yaml:"required,omitempty" json:"required,omitempty"`
+	Custom         bool   `yaml:"custom,omitempty" json:"custom,omitempty"`
+	InlineYAML     string `yaml:"inlineYAML,omitempty" json:"inlineYAML,omitempty"`
+	TemplateRef    string `yaml:"templateRef,omitempty" json:"templateRef,omitempty"`
+	WaitForReady   bool   `yaml:"wait,omitempty" json:"wait,omitempty"`
 }
 
 type NamespaceSpec struct {

@@ -151,3 +151,21 @@ func CheckAlerts(ctx context.Context, bin, promURL, tokenFile, alertsYml, metric
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
+// RunInit executes kube-burner init for ObjectPressure creates.
+func RunInit(ctx context.Context, bin, initYml, kubeconfig, runID string) error {
+	args := []string{
+		"init",
+		"-c", initYml,
+		"--uuid", runID,
+		"--skip-log-file",
+		"--log-level", "info",
+	}
+	if kubeconfig != "" {
+		args = append(args, "--kubeconfig", kubeconfig)
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
