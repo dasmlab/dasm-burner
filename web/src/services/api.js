@@ -6,19 +6,6 @@ const api = axios.create({
   withCredentials: true,
 })
 
-api.interceptors.response.use(undefined, async (err) => {
-  const cfg = err.config
-  if (!cfg) return Promise.reject(err)
-  const method = String(cfg.method || 'get').toLowerCase()
-  const st = err.response?.status
-  const retryable = method === 'get' && (st === 502 || st === 503)
-  const n = cfg.__retryCount || 0
-  if (!retryable || n >= 3) return Promise.reject(err)
-  cfg.__retryCount = n + 1
-  await new Promise((r) => setTimeout(r, 400 * cfg.__retryCount))
-  return api.request(cfg)
-})
-
 export default api
 
 export const getVersion = () => api.get('/version').then((r) => r.data)
@@ -66,9 +53,9 @@ export const getCleanupReport = (id) =>
 export const getOVNDiag = () =>
   api.get('/ovndiag', { timeout: 120_000 }).then((r) => r.data)
 export const sampleOVNDiag = (body) =>
-  api.post('/ovndiag/sample', body || {}, { timeout: 120_000 }).then((r) => r.data)
+  api.post('/ovndiag/sample', body || {}, { timeout: 20_000 }).then((r) => r.data)
 export const baselineOVNDiag = () =>
-  api.post('/ovndiag/baseline', {}, { timeout: 120_000 }).then((r) => r.data)
+  api.post('/ovndiag/baseline', {}, { timeout: 20_000 }).then((r) => r.data)
 export const listOVNDiagHistory = () =>
   api.get('/ovndiag/history', { timeout: 60_000 }).then((r) => r.data)
 export const getOVNDiagSnapshot = (id) =>

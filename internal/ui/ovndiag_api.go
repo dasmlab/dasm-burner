@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/dasmlab/dasm-burner/internal/kube"
 	"github.com/dasmlab/dasm-burner/internal/ovndiag"
 )
 
@@ -67,21 +65,17 @@ func (s *Server) ovndiagBaselineAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	snap, err := s.runOVNSample(r, 0)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err)
+	if !s.enqueueOVN("baseline", 0, s.ensureLogSink()) {
+		writeError(w, http.StatusConflict, fmt.Errorf("OVN worker busy — wait for the in-flight sample"))
 		return
 	}
-	s.ovnBaseline().Capture(snap.Nodes)
-	snap.BaselineAt = s.ovnBaseline().At()
-	id, _ := ovndiag.WriteSnapshot(s.RunDir, snap)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"baselineAt": snap.BaselineAt,
-		"snapshotId": id,
-		"snapshot":   snap,
-		"captured":   baselineCaptureSummary(snap),
-		"rules":      ovndiag.RuleCatalog,
-		"warning":    "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"accepted": true,
+		"async":    true,
+		"kind":     "baseline",
+		"stream":   eventsPath,
+		"message":  "baseline queued on OVN worker; Reload latest or watch SSE event ovn",
+		"warning":  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
 
@@ -111,40 +105,18 @@ func (s *Server) ovndiagSample(w http.ResponseWriter, r *http.Request) {
 		BatchID int `json:"batchId"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	snap, err := s.runOVNSample(r, body.BatchID)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err)
+	if !s.enqueueOVN("sample", body.BatchID, s.ensureLogSink()) {
+		writeError(w, http.StatusConflict, fmt.Errorf("OVN worker busy — wait for the in-flight sample"))
 		return
 	}
-	id, _ := ovndiag.WriteSnapshot(s.RunDir, snap)
-	sums, _ := ovndiag.ListSummaries(s.RunDir, 50)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"snapshotId": id,
-		"snapshot":   snap,
-		"samples":    sums,
-		"rules":      ovndiag.RuleCatalog,
-		"baseline":   liveBaselineInfo(s),
-		"warning":    "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"accepted": true,
+		"async":    true,
+		"kind":     "sample",
+		"stream":   eventsPath,
+		"message":  "sample queued on OVN worker; Reload latest or watch SSE event ovn",
+		"warning":  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
-}
-
-func (s *Server) runOVNSample(r *http.Request, batchID int) (*ovndiag.Snapshot, error) {
-	cl, err := s.liveClient(20, 40)
-	if err != nil {
-		return nil, err
-	}
-	live, ok := cl.(*kube.Live)
-	if !ok || live.Clientset() == nil {
-		return nil, fmt.Errorf("ovndiag requires a live cluster clientset")
-	}
-	runID := ""
-	m := s.execMgr()
-	m.mu.Lock()
-	if m.cur != nil {
-		runID = m.cur.RunID
-	}
-	m.mu.Unlock()
-	return ovndiag.SampleLive(r.Context(), live.Clientset(), live.Dynamic(), s.ovnBaseline(), runID, s.currentCluster().Name, batchID)
 }
 
 func liveBaselineInfo(s *Server) map[string]any {
@@ -164,27 +136,4 @@ func liveBaselineInfo(s *Server) map[string]any {
 		out["at"] = at
 	}
 	return out
-}
-
-func baselineCaptureSummary(snap *ovndiag.Snapshot) map[string]any {
-	if snap == nil {
-		return map[string]any{}
-	}
-	pods := 0
-	for _, n := range snap.Nodes {
-		if n.OVNKube.PodName != "" {
-			pods++
-		}
-	}
-	return map[string]any{
-		"at":           snap.BaselineAt,
-		"nodes":        len(snap.Nodes),
-		"ovnkubePods":  pods,
-		"overallState": snap.OverallState,
-		"findingCount": len(snap.Findings),
-		"what":         "Restart / Ready / resource watermarks for later Δ comparison",
-		"where":        "Process memory (baseline) + PVC snapshot under /data/ovndiag/",
-		"cluster":      snap.Cluster,
-		"generatedAt":  snap.GeneratedAt.Format(time.RFC3339),
-	}
 }

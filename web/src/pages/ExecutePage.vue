@@ -385,6 +385,7 @@ import {
 import api from 'src/services/api'
 import { useAuth } from 'src/services/auth'
 import { useCluster } from 'src/services/cluster'
+import { openLiveStream } from 'src/services/events'
 
 const auth = useAuth()
 const canAdmin = computed(() => auth.isAdmin.value)
@@ -425,8 +426,9 @@ const tools = reactive({
   safety: false,
   details: false,
 })
-let timer = null
-let cleanupPoll = null
+let liveStream = null
+let keepAliveTimer = null
+let busCleaning = false
 
 const templateOptions = computed(() =>
   templates.value.map((t) => {
@@ -600,7 +602,7 @@ async function refreshMaxPods(fillInput) {
   try {
     const data = await getWorkerMaxPods()
     applyMaxPodsStatus(data.maxPods || data, fillInput !== false)
-    if (data.run) run.value = data.run
+    if (data.run) adoptRun(data.run)
   } catch (e) {
     error.value = e.response?.data?.error || e.message
   } finally {
@@ -631,15 +633,14 @@ async function applyMaxPods() {
       maxPods: Number(maxPodsInput.value),
       confirm: true,
     })
-    if (data.run) run.value = data.run
+    if (data.run) adoptRun(data.run)
     maxPodsOpen.value = false
     cleanupMsg.value = `Worker maxPods=${maxPodsInput.value} started on ${data.cluster || cluster.currentLabel.value} — watch live log for serial MCP roll.`
     const deadline = Date.now() + 100 * 60 * 1000
+    busCleaning = true
     while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 4000))
-      await poll()
-      const st = await getCleanupStatus(templateName.value).catch(() => null)
-      if (st && !st.cleaning) break
+      await new Promise((r) => setTimeout(r, 2000))
+      if (!busCleaning) break
     }
     await refreshCapacity()
     await refreshDeploy()
@@ -687,7 +688,7 @@ async function checkState(reason) {
       template: templateName.value,
       reason: reason || 'manual refresh',
     })
-    if (data.run) run.value = data.run
+    if (data.run) adoptRun(data.run)
     deploy.value = data.template || null
     managedTotal.value = data.managedTotal ?? null
     deployCluster.value = data.cluster || cluster.currentLabel.value
@@ -700,40 +701,78 @@ async function checkState(reason) {
   }
 }
 
+function adoptRun(next) {
+  if (!next) return
+  const prev = run.value
+  if (prev?.id && next.id === prev.id && (prev.logs || []).length > (next.logs || []).length) {
+    next = { ...next, logs: prev.logs }
+  }
+  run.value = next
+}
+  const line = ev?.data
+  if (!line) return
+  const cl = cluster.currentName.value
+  if (ev.cluster && cl && ev.cluster !== cl) return
+  const cur = run.value || { status: 'idle', logs: [], steps: [] }
+  const logs = [...(cur.logs || []), line]
+  if (logs.length > 400) logs.splice(0, logs.length - 400)
+  run.value = { ...cur, logs, logSeq: ev.seq || cur.logSeq }
+  nextTick(() => {
+    if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
+  })
+}
+
+function applyRunEvent(ev) {
+  const meta = ev?.data
+  if (!meta) return
+  const cl = cluster.currentName.value
+  if (meta.cluster && cl && meta.cluster !== cl) return
+  const logs = run.value?.logs || []
+  run.value = { ...meta, logs: logs.length ? logs : (meta.logs || []) }
+}
+
+function applyCleanupEvent(ev) {
+  const d = ev?.data || {}
+  if (typeof d.cleaning === 'boolean') busCleaning = d.cleaning
+  if (d.template) deploy.value = d.template
+  if (d.managedTotal != null) managedTotal.value = d.managedTotal
+  if (d.cluster) deployCluster.value = d.cluster
+}
+
+function connectLiveStream(after) {
+  if (liveStream) {
+    liveStream.close()
+    liveStream = null
+  }
+  liveStream = openLiveStream({
+    after: after || 0,
+    onLog: applyLogEvent,
+    onRun: applyRunEvent,
+    onCleanup: applyCleanupEvent,
+  })
+}
+
 function startCleanupPoll() {
-  stopCleanupPoll()
-  cleanupPoll = setInterval(async () => {
-    try {
-      const data = await getRun()
-      run.value = data.run
-      await nextTick()
-      if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
-    } catch {
-      /* ignore */
-    }
-  }, 800)
+  busCleaning = true
 }
 
 function stopCleanupPoll() {
-  if (cleanupPoll) {
-    clearInterval(cleanupPoll)
-    cleanupPoll = null
-  }
+  /* SSE carries cleanup progress; no JSON poll loop */
 }
 
 async function poll() {
   try {
     const data = await getRun()
-    run.value = data.run
-    await nextTick()
-    if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
-    if (!running.value && !cleaning.value) await refreshDeploy()
-    // Keep OIDC session alive during long applies so the page doesn't bounce to login.
-    if (running.value) {
-      api.get('/auth/keepalive').catch(() => {})
+    if (data.run) {
+      adoptRun(data.run)
+      await nextTick()
+      if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight
+    }
+    if (!liveStream || liveStream.readyState === EventSource.CLOSED) {
+      connectLiveStream(data.run?.logSeq || 0)
     }
   } catch {
-    /* ignore poll errors */
+    /* ignore */
   }
 }
 
@@ -794,12 +833,7 @@ async function start() {
         throw e
       }
     }
-    run.value = data.run
-  } catch (e) {
-    error.value = e.response?.data?.error || e.message
-  } finally {
-    starting.value = false
-  }
+    adoptRun(data.run)
 }
 
 async function cancel() {
@@ -815,7 +849,7 @@ async function clearLog() {
   error.value = ''
   try {
     const data = await clearRunLog()
-    if (data.run) run.value = data.run
+    if (data.run) adoptRun(data.run)
     else if (run.value) run.value = { ...run.value, logs: [] }
   } catch (e) {
     error.value = e.response?.data?.error || e.message
@@ -862,25 +896,22 @@ async function doCleanup(scope) {
       wait: true,
       dryRun: false,
     })
-    if (data.run) run.value = data.run
+    if (data.run) adoptRun(data.run)
     cleanupMsg.value = `Cleanup ${scope} started in background on ${data.cluster || cluster.currentLabel.value} — watch live log (waits up to ~45m for slow NS deletes).`
     // Poll until server reports cleaning=false (survives route timeouts).
     const deadline = Date.now() + 50 * 60 * 1000
     let reportId = ''
+    busCleaning = true
     while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 3000))
-      await poll()
-      const st = await getCleanupStatus(templateName.value).catch(() => null)
-      if (st) {
-        deploy.value = st.template || null
-        if (!st.cleaning) {
-          const latest = await listCleanupReports().catch(() => null)
-          reportId = latest?.reports?.[0]?.id || ''
-          cleanupMsg.value = st.template?.deployed
-            ? `Cleanup finished but namespaces remain on ${st.cluster || ''} — see live log.`
-            : `Cleanup ${scope} finished on ${st.cluster || cluster.currentLabel.value}${reportId ? ` · report ${reportId}` : ''}.`
-          break
-        }
+      await new Promise((r) => setTimeout(r, 2000))
+      if (!busCleaning) {
+        const latest = await listCleanupReports().catch(() => null)
+        reportId = latest?.reports?.[0]?.id || ''
+        const st = await getCleanupStatus(templateName.value).catch(() => null)
+        cleanupMsg.value = st?.template?.deployed
+          ? `Cleanup finished but namespaces remain on ${st.cluster || ''} — see live log.`
+          : `Cleanup ${scope} finished on ${st?.cluster || cluster.currentLabel.value}${reportId ? ` · report ${reportId}` : ''}.`
+        break
       }
     }
     await refreshDeploy()
@@ -918,11 +949,14 @@ onMounted(async () => {
   } catch (e) {
     error.value = e.response?.data?.error || e.message
   }
-  timer = setInterval(poll, 1500)
+  keepAliveTimer = setInterval(() => {
+    if (running.value) api.get('/auth/keepalive').catch(() => {})
+  }, 240000)
 })
 
 onUnmounted(() => {
-  if (timer) clearInterval(timer)
+  if (keepAliveTimer) clearInterval(keepAliveTimer)
+  if (liveStream) liveStream.close()
   stopCleanupPoll()
 })
 </script>

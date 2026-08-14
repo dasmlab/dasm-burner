@@ -19,7 +19,7 @@
       <span v-if="snap?.baselineAt" class="text-caption text-grey-7">baseline {{ fmt(snap.baselineAt) }}</span>
     </div>
     <p class="text-caption text-grey-7 q-mb-md">
-      Sample / baseline can take 30–90s (nodes + OVN pods + events + log tails). A short axios timeout used to look like a Network Error — wait for the button spinner.
+      Sample / baseline run on a single-slot OVN worker (not the HTTP handler). POST returns immediately; this page reloads from the PVC until the snapshot appears (often 30–90s).
     </p>
 
     <div v-if="notice" class="dasm-panel q-mb-md text-positive">{{ notice }}</div>
@@ -336,11 +336,23 @@ async function openSample(id) {
 async function sample() {
   busy.value = true
   error.value = ''
-  notice.value = 'Sampling cluster…'
+  notice.value = 'Queued on OVN worker (off the web path)…'
+  const before = snap.value?.id || snap.value?.generatedAt || samples.value?.[0]?.id
   try {
-    const data = await sampleOVNDiag({})
-    applyPayload(data)
-    notice.value = `Sample stored${data.snapshotId ? ` · ${data.snapshotId}` : ''}. History table updated.`
+    await sampleOVNDiag({})
+    const deadline = Date.now() + 120000
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const data = await getOVNDiag()
+      applyPayload(data)
+      const now = data.snapshot?.id || data.snapshot?.generatedAt || data.samples?.[0]?.id
+      if (now && now !== before) {
+        notice.value = `Sample stored${data.snapshotId || data.samples?.[0]?.id ? ` · ${data.snapshotId || data.samples[0].id}` : ''}`
+        await refreshHistory()
+        return
+      }
+    }
+    notice.value = 'Sample still running — use Reload latest in a moment.'
   } catch (e) {
     notice.value = ''
     error.value = errText(e)
@@ -351,19 +363,23 @@ async function sample() {
 async function captureBaseline() {
   busy.value = true
   error.value = ''
-  notice.value = 'Capturing baseline watermarks…'
+  notice.value = 'Baseline queued on OVN worker…'
+  const before = snap.value?.id || snap.value?.generatedAt || samples.value?.[0]?.id
   try {
-    const data = await baselineOVNDiag()
-    applyPayload(data)
-    const c = data.captured || {}
-    notice.value = [
-      'Baseline captured.',
-      `Nodes=${c.nodes ?? '—'}`,
-      `ovnkube pods=${c.ovnkubePods ?? '—'}`,
-      `at ${fmt(c.at || data.baselineAt)}`,
-      `stored as ${data.snapshotId || 'snapshot'} on PVC.`,
-    ].join(' ')
-    await refreshHistory()
+    await baselineOVNDiag()
+    const deadline = Date.now() + 120000
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const data = await getOVNDiag()
+      applyPayload(data)
+      const now = data.snapshot?.id || data.snapshot?.generatedAt || data.samples?.[0]?.id
+      if (now && now !== before) {
+        notice.value = `Baseline captured · ${data.snapshotId || data.samples?.[0]?.id || 'snapshot'} on PVC.`
+        await refreshHistory()
+        return
+      }
+    }
+    notice.value = 'Baseline still running — use Reload latest in a moment.'
   } catch (e) {
     notice.value = ''
     error.value = errText(e)

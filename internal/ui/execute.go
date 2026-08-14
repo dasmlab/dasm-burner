@@ -15,7 +15,6 @@ import (
 	"github.com/dasmlab/dasm-burner/internal/burner"
 	"github.com/dasmlab/dasm-burner/internal/config"
 	"github.com/dasmlab/dasm-burner/internal/kube"
-	"github.com/dasmlab/dasm-burner/internal/ovndiag"
 	"github.com/dasmlab/dasm-burner/internal/runner"
 	"github.com/dasmlab/dasm-burner/internal/topology"
 )
@@ -71,9 +70,12 @@ type execRun struct {
 	ReportURL   string             `json:"reportUrl,omitempty"`
 	SnapshotID  string             `json:"snapshotId,omitempty"`
 	Warning     string             `json:"warning"`
+	LogSeq      uint64             `json:"logSeq,omitempty"`
+	Stream      string             `json:"stream,omitempty"`
 	mu          sync.Mutex         `json:"-"`
 	cancel      context.CancelFunc `json:"-"`
 	onChange    func()             `json:"-"`
+	publishLog  func(line logLine) `json:"-"`
 }
 
 type execManager struct {
@@ -91,12 +93,14 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
 		if cur == nil {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"run":     nil,
+				"stream":  eventsPath,
 				"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 			})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"run":     cur.snapshot(),
+			"run":     cur.snapshotSlim(),
+			"stream":  eventsPath,
 			"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 		})
 	case http.MethodPost:
@@ -296,8 +300,9 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 			run.appendLog("warn", "CAPACITY", 0, "proceeding despite over-capacity (allowOverCapacity=true)")
 		}
 	}
-	run.appendLog("info", "BATCH", 0, fmt.Sprintf("%s · size=%d waves=%d · %s",
-		batchPlan.Strategy, batchPlan.Size, batchPlan.Count, batchPlan.Reason))
+	run.appendLog("info", "BATCH", 0, fmt.Sprintf("%s · size=%d waves=%d · ~%d objs/wave (units/NS=%d target≤%d) · %s",
+		batchPlan.Strategy, batchPlan.Size, batchPlan.Count,
+		batchPlan.ObjectsPerWave, batchPlan.ObjectsPerNS, batchPlan.TargetWaveObjs, batchPlan.Reason))
 	if len(cfg.Application.AvoidTaints) == 0 {
 		run.appendLog("info", "SCHED", 0, "avoidTaints=none (pods may land on any node the scheduler allows)")
 	} else {
@@ -472,26 +477,11 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			run.appendLog("info", "OPEN", 0, fmt.Sprintf("health snapshot nodes Ready %d/%d OVN %d/%d restarts=%d",
 				h.NodesReady, h.NodesReady+h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts))
 		}
-		if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil && enableOVN {
-			if snap, err := ovndiag.SampleLive(ctx, live.Clientset(), live.Dynamic(), nil, g.RunID, run.Cluster, 0); err == nil {
-				s.ovnBaseline().Capture(snap.Nodes)
-				snap.BaselineAt = s.ovnBaseline().At()
-				if id, werr := ovndiag.WriteSnapshot(s.RunDir, snap); werr == nil {
-					run.appendLog("info", "OVNDIAG", 0, "baseline captured · snapshot "+id)
-				}
-			} else {
-				run.appendLog("warn", "OVNDIAG", 0, "baseline sample: "+err.Error())
-			}
-			if !dryRun {
-				watch := &ovndiag.Watch{
-					CS: live.Clientset(), Dyn: live.Dynamic(), Baseline: s.ovnBaseline(),
-					RunDir: s.RunDir, RunID: g.RunID, Cluster: run.Cluster, Interval: 45 * time.Second,
-				}
-				watch.Start(ctx)
-				defer watch.Stop()
-				run.appendLog("info", "OVNDIAG", 0, "continuous watch started (45s)")
-			}
-		}
+	if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil && enableOVN {
+		run.appendLog("info", "OVNDIAG", 0, "baseline sample queued on OVN worker (not on the web request path)")
+		s.performOVNJob(ovnJob{kind: "baseline", log: run})
+		run.appendLog("info", "OVNDIAG", 0, "per-batch samples go through the same single-slot worker; no 45s watch loop")
+	}
 	}
 
 	if !dryRun && !cfg.IsObjectPressure() {
@@ -577,25 +567,9 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			}
 			// OVN diagnoser: sample after each batch measurement + final (not kube-burner metrics).
 			if enableOVN && !dryRun && (phase == runner.PhaseBatchMeasurement || phase == runner.PhaseFinalMeasurement) {
-				if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil {
-					bid := batch
-					scanLogs := phase == runner.PhaseFinalMeasurement || batch%3 == 0
-					go func() {
-						sctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-						defer cancel()
-						snap, err := ovndiag.SampleWith(sctx, live.Clientset(), s.ovnBaseline(), g.RunID, run.Cluster, bid, ovndiag.SampleOpts{
-							ScanLogs:    scanLogs,
-							MaxLogPods:  6,
-							EventWindow: 15 * time.Minute,
-							Dyn:         live.Dynamic(),
-						})
-						if err != nil {
-							run.appendLog("warn", "OVNDIAG", bid, err.Error())
-							return
-						}
-						id, _ := ovndiag.WriteSnapshot(s.RunDir, snap)
-						run.appendLog("info", "OVNDIAG", bid, fmt.Sprintf("%s · findings=%d · snapshot %s", snap.OverallState, len(snap.Findings), id))
-					}()
+				bid := batch
+				if !s.enqueueOVN("sample", bid, run) {
+					run.appendLog("warn", "OVNDIAG", bid, "OVN worker busy — sample skipped")
 				}
 			}
 		},
@@ -772,23 +746,49 @@ func writeApplyReport(runDir string, rep *runner.Report) error {
 }
 
 func (r *execRun) snapshot() *execRun {
+	return r.snapshotTail(80)
+}
+
+func (r *execRun) snapshotSlim() *execRun {
+	return r.snapshotTail(80)
+}
+
+func (r *execRun) snapshotMeta() *execRun {
+	return r.snapshotTail(0)
+}
+
+func (r *execRun) snapshotTail(maxLogs int) *execRun {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cp := *r
 	cp.Steps = append([]runStep(nil), r.Steps...)
-	cp.Logs = append([]logLine(nil), r.Logs...)
+	cp.Stream = eventsPath
+	if maxLogs <= 0 || len(r.Logs) == 0 {
+		cp.Logs = nil
+		return &cp
+	}
+	if len(r.Logs) > maxLogs {
+		cp.Logs = append([]logLine(nil), r.Logs[len(r.Logs)-maxLogs:]...)
+	} else {
+		cp.Logs = append([]logLine(nil), r.Logs...)
+	}
 	return &cp
 }
 
 func (r *execRun) appendLog(level, phase string, batch int, msg string) {
+	line := logLine{At: time.Now(), Level: level, Phase: phase, Batch: batch, Message: msg}
 	r.mu.Lock()
-	r.Logs = append(r.Logs, logLine{At: time.Now(), Level: level, Phase: phase, Batch: batch, Message: msg})
-	const maxLogs = 800
+	r.Logs = append(r.Logs, line)
+	const maxLogs = 400
 	if len(r.Logs) > maxLogs {
 		r.Logs = r.Logs[len(r.Logs)-maxLogs:]
 	}
+	pub := r.publishLog
 	cb := r.onChange
 	r.mu.Unlock()
+	if pub != nil {
+		pub(line)
+	}
 	if cb != nil {
 		cb()
 	}

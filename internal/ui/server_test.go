@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -85,6 +86,37 @@ func TestDryRunExecute(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+func TestEventsSSE(t *testing.T) {
+	s := New("dev", t.TempDir(), "", "", nil, nil)
+	s.eventBus().Publish("log", "TEST3", "smoke", logLine{Level: "info", Phase: "CLEANUP", Message: "hello-sse"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?after=0", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		s.Mux.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		body := rec.Body.String()
+		if strings.Contains(body, "hello-sse") && strings.Contains(body, "event: log") {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	t.Fatalf("SSE body missing log frame: %q", rec.Body.String())
 }
 
 func TestDeleteLoginCommandCluster(t *testing.T) {

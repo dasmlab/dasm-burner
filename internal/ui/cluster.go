@@ -143,8 +143,10 @@ func (s *Server) selectCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	cs.mu.Unlock()
 	_ = s.persistSelectedCluster(persisted)
+	s.invalidateManagedIndex()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"current": s.currentCluster(),
+		"stream":  eventsPath,
 		"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }

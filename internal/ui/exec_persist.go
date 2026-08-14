@@ -15,7 +15,7 @@ func (s *Server) writeCurrentExec(run *execRun) {
 	if run == nil || s.RunDir == "" {
 		return
 	}
-	snap := run.snapshot()
+	snap := run.snapshotTail(40)
 	b, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return
@@ -67,13 +67,20 @@ func (s *Server) loadCurrentExec() *execRun {
 
 func (r *execRun) attachPersist(s *Server) {
 	var last time.Time
+	r.publishLog = func(line logLine) {
+		seq := s.eventBus().Publish("log", r.Cluster, r.Template, line)
+		r.mu.Lock()
+		r.LogSeq = seq
+		r.mu.Unlock()
+	}
 	r.onChange = func() {
 		now := time.Now()
-		if !last.IsZero() && now.Sub(last) < 2*time.Second {
+		if !last.IsZero() && now.Sub(last) < 8*time.Second {
 			return
 		}
 		last = now
 		s.writeCurrentExec(r)
+		s.publishRunMeta(r)
 	}
 }
 

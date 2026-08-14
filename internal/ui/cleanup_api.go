@@ -78,7 +78,9 @@ func (s *Server) cleanupCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	sink.appendLog("info", "STATE", 0, fmt.Sprintf("check on cluster=%s template=%s (%s)", cluster, body.Template, reason))
 
-	status, err := s.computeCleanupStatus(r, body.Template)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	status, err := s.computeCleanupStatus(ctx, body.Template)
 	if err != nil {
 		sink.appendLog("error", "STATE", 0, "check failed: "+err.Error())
 		writeError(w, http.StatusInternalServerError, err)
@@ -87,13 +89,8 @@ func (s *Server) cleanupCheck(w http.ResponseWriter, r *http.Request) {
 	if status.Template != nil {
 		t := status.Template
 		if t.Deployed {
-			obj := ""
-			if t.Objects != nil {
-				obj = fmt.Sprintf(" · routes=%d svcs=%d pods=%d/%d",
-					t.Objects.Routes, t.Objects.Services, t.Objects.ReadyPods, t.Objects.Pods)
-			}
-			sink.appendLog("warn", "STATE", 0, fmt.Sprintf("ONLINE for template %s on %s · %s · %d NS%s",
-				t.Template, cluster, orEmpty(t.Prefix, "kb-?"), t.Count, obj))
+			sink.appendLog("warn", "STATE", 0, fmt.Sprintf("ONLINE for template %s on %s · %s · %d NS",
+				t.Template, cluster, orEmpty(t.Prefix, "kb-?"), t.Count))
 		} else if status.ManagedTotal > 0 {
 			sink.appendLog("info", "STATE", 0, fmt.Sprintf(
 				"template %s has no live NS on %s — cluster still has %d managed NS under other run(s)/templates",
@@ -105,20 +102,17 @@ func (s *Server) cleanupCheck(w http.ResponseWriter, r *http.Request) {
 	sink.appendLog("info", "STATE", 0, fmt.Sprintf("cluster has %d managed NS total across %d run(s)",
 		status.ManagedTotal, len(status.LiveRuns)))
 	for _, row := range status.LiveRuns {
-		extra := ""
-		if row.Objects != nil {
-			extra = fmt.Sprintf(" · routes=%d svcs=%d pods=%d/%d",
-				row.Objects.Routes, row.Objects.Services, row.Objects.ReadyPods, row.Objects.Pods)
-		}
-		sink.appendLog("info", "STATE", 0, fmt.Sprintf("  live %s (%s) · %d NS%s", row.Prefix, orEmpty(row.Template, "unlabeled"), row.Count, extra))
+		sink.appendLog("info", "STATE", 0, fmt.Sprintf("  live %s (%s) · %d NS", row.Prefix, orEmpty(row.Template, "unlabeled"), row.Count))
 	}
+	s.publishCleanup(status)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"template":     status.Template,
 		"liveRuns":     status.LiveRuns,
 		"managedTotal": status.ManagedTotal,
 		"cluster":      cluster,
 		"cleaning":     s.isCleanupBusy(),
-		"run":          sink.snapshot(),
+		"run":          sink.snapshotSlim(),
+		"stream":       eventsPath,
 		"warning":      "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
@@ -131,7 +125,9 @@ type cleanupStatusPayload struct {
 
 func (s *Server) cleanupStatus(w http.ResponseWriter, r *http.Request) {
 	template := strings.TrimSpace(r.URL.Query().Get("template"))
-	status, err := s.computeCleanupStatus(r, template)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	status, err := s.computeCleanupStatus(ctx, template)
 	if err != nil {
 		if strings.Contains(err.Error(), "cluster") || strings.Contains(err.Error(), "kubeconfig") || strings.Contains(err.Error(), "config") {
 			writeError(w, http.StatusServiceUnavailable, err)
@@ -146,40 +142,22 @@ func (s *Server) cleanupStatus(w http.ResponseWriter, r *http.Request) {
 		"managedTotal": status.ManagedTotal,
 		"cluster":      s.currentCluster().Name,
 		"cleaning":     s.isCleanupBusy(),
+		"stream":       eventsPath,
 		"warning":      "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
 
-func (s *Server) computeCleanupStatus(r *http.Request, template string) (*cleanupStatusPayload, error) {
-	cl, err := s.liveClient(20, 40)
-	if err != nil {
-		return nil, err
-	}
-	ctx := r.Context()
+type nsMeta struct {
+	name, runID, config string
+}
+
+func (s *Server) computeCleanupStatus(ctx context.Context, template string) (*cleanupStatusPayload, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
-	type nsMeta struct {
-		name, runID, config string
-	}
-	var metas []nsMeta
-	if live, ok := cl.(*kube.Live); ok && live != nil {
-		infos, err := live.ListManagedNamespaceInfo(ctx, "")
-		if err != nil {
-			return nil, err
-		}
-		for _, info := range infos {
-			metas = append(metas, nsMeta{name: info.Name, runID: info.RunID, config: info.Config})
-		}
-	} else {
-		allNS, err := cl.ListManagedNamespaces(ctx, "")
-		if err != nil {
-			return nil, err
-		}
-		for _, name := range allNS {
-			metas = append(metas, nsMeta{name: name, runID: runIDFromNS(name)})
-		}
+	metas, cluster, err := s.managedMetas(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	byRun := map[string][]string{}
@@ -198,15 +176,12 @@ func (s *Server) computeCleanupStatus(r *http.Request, template string) (*cleanu
 	}
 
 	out := &cleanupStatusPayload{ManagedTotal: len(metas)}
-	cluster := s.currentCluster().Name
 
 	if template != "" {
 		st := &deployStatus{Template: template, Label: "cleaned", Deployed: false, Cluster: cluster}
 		var matched []string
 		var matchedRun string
 
-		// Match live NS via dasm-burner.dasmlab.org/config (= template name).
-		// History alone is wrong mid-run (history used to be written only at finish).
 		for rid, ns := range byRun {
 			if configByRun[rid] != template {
 				continue
@@ -244,7 +219,6 @@ func (s *Server) computeCleanupStatus(r *http.Request, template string) (*cleanu
 		if len(matched) > 0 {
 			sort.Strings(matched)
 			st.Deployed = true
-			// Cap names retained in API responses for large runs (counts still exact).
 			if len(matched) > 40 {
 				st.Namespaces = append([]string(nil), matched[:40]...)
 			} else {
@@ -252,9 +226,6 @@ func (s *Server) computeCleanupStatus(r *http.Request, template string) (*cleanu
 			}
 			st.Count = len(matched)
 			st.Label = "online"
-			if snap, err := cl.ListManaged(ctx, matchedRun); err == nil {
-				st.Objects = snapshotToObjectCounts(snap)
-			}
 		} else {
 			st.Label = "cleaned"
 		}
@@ -285,25 +256,62 @@ func (s *Server) computeCleanupStatus(r *http.Request, template string) (*cleanu
 		} else {
 			row.Namespaces = ns
 		}
-		if snap, err := cl.ListManaged(ctx, rid); err == nil {
-			row.Objects = snapshotToObjectCounts(snap)
-		}
 		out.LiveRuns = append(out.LiveRuns, row)
 	}
 	sort.Slice(out.LiveRuns, func(i, j int) bool { return out.LiveRuns[i].RunID > out.LiveRuns[j].RunID })
 	return out, nil
 }
 
-func snapshotToObjectCounts(snap kube.Snapshot) *objectCounts {
-	return &objectCounts{
-		Namespaces:  snap.Namespaces,
-		Routes:      snap.Routes,
-		Services:    snap.Services,
-		Deployments: snap.Deployments,
-		Pods:        snap.Pods,
-		ReadyPods:   snap.ReadyPods,
-		PodPhases:   snap.PodPhases,
+const managedIndexTTL = 8 * time.Second
+
+func (s *Server) managedMetas(ctx context.Context) ([]nsMeta, string, error) {
+	cluster := s.currentCluster().Name
+	s.indexMu.Lock()
+	if time.Since(s.indexAt) < managedIndexTTL && s.indexCluster == cluster && (s.indexMetas != nil || s.indexErr != nil) {
+		metas, err := s.indexMetas, s.indexErr
+		s.indexMu.Unlock()
+		return metas, cluster, err
 	}
+	s.indexMu.Unlock()
+
+	cl, err := s.liveClient(20, 40)
+	if err != nil {
+		return nil, cluster, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+
+	var metas []nsMeta
+	if live, ok := cl.(*kube.Live); ok && live != nil {
+		infos, err := live.ListManagedNamespaceInfo(ctx, "")
+		if err != nil {
+			s.indexMu.Lock()
+			s.indexAt, s.indexCluster, s.indexMetas, s.indexErr = time.Now(), cluster, nil, err
+			s.indexMu.Unlock()
+			return nil, cluster, err
+		}
+		for _, info := range infos {
+			metas = append(metas, nsMeta{name: info.Name, runID: info.RunID, config: info.Config})
+		}
+	} else {
+		allNS, err := cl.ListManagedNamespaces(ctx, "")
+		if err != nil {
+			s.indexMu.Lock()
+			s.indexAt, s.indexCluster, s.indexMetas, s.indexErr = time.Now(), cluster, nil, err
+			s.indexMu.Unlock()
+			return nil, cluster, err
+		}
+		for _, name := range allNS {
+			metas = append(metas, nsMeta{name: name, runID: runIDFromNS(name)})
+		}
+	}
+	s.indexMu.Lock()
+	s.indexAt, s.indexCluster, s.indexMetas, s.indexErr = time.Now(), cluster, metas, nil
+	s.indexMu.Unlock()
+	return metas, cluster, nil
 }
 
 func runIDFromNS(name string) string {
@@ -328,13 +336,19 @@ func (s *Server) ensureLogSink() *execRun {
 	if m.cur == nil {
 		now := time.Now()
 		m.cur = &execRun{
-			ID:      fmt.Sprintf("session-%d", now.Unix()),
-			Status:  "idle",
-			Cluster: s.currentCluster().Name,
-			Started: &now,
-			Warning: "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+			ID:       fmt.Sprintf("session-%d", now.Unix()),
+			Status:   "idle",
+			Cluster:  s.currentCluster().Name,
+			Template: s.activeTemplateName(),
+			Started:  &now,
+			Warning:  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 		}
 		m.cur.attachPersist(s)
+	} else {
+		m.cur.Cluster = s.currentCluster().Name
+		if t := s.activeTemplateName(); t != "" {
+			m.cur.Template = t
+		}
 	}
 	return m.cur
 }
@@ -405,7 +419,7 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 			m.mu.Unlock()
 			if cur != nil && !cur.DryRun && cur.RunID != "" {
 				runIDs = []string{cur.RunID}
-			} else if st, err := s.computeCleanupStatus(r, body.Template); err == nil && st.Template != nil && st.Template.RunID != "" {
+			} else if st, err := s.computeCleanupStatus(context.Background(), body.Template); err == nil && st.Template != nil && st.Template.RunID != "" {
 				runIDs = []string{st.Template.RunID}
 			} else {
 				s.mu.Lock()
@@ -433,7 +447,7 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 				seen[e.RunID] = true
 			}
 		}
-		if st, err := s.computeCleanupStatus(r, body.Template); err == nil && st.Template != nil && st.Template.RunID != "" {
+		if st, err := s.computeCleanupStatus(context.Background(), body.Template); err == nil && st.Template != nil && st.Template.RunID != "" {
 			if !seen[st.Template.RunID] {
 				runIDs = append(runIDs, st.Template.RunID)
 			}
@@ -473,9 +487,10 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 		"dryRun":   body.DryRun,
 		"cluster":  cluster,
 		"target":   target,
-		"run":      sink.snapshot(),
+		"run":      sink.snapshotSlim(),
+		"stream":   eventsPath,
 		"warning":  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
-		"note":     "Cleanup runs in the background; watch the live log. Poll /api/v1/cleanup until cleaning=false.",
+		"note":     "Cleanup runs in the background; watch the live log over SSE /api/v1/events.",
 	})
 
 	go s.runCleanupJob(cl, runIDs, body.Scope, body.Template, body.Wait, body.DryRun, cluster, sink)
@@ -487,12 +502,38 @@ func (s *Server) isCleanupBusy() bool {
 	return s.cleanupBusy
 }
 
+func (s *Server) invalidateManagedIndex() {
+	s.indexMu.Lock()
+	s.indexAt = time.Time{}
+	s.indexMetas = nil
+	s.indexErr = nil
+	s.indexMu.Unlock()
+}
+
 func (s *Server) runCleanupJob(cl kube.Cluster, runIDs []string, scope, template string, wait, dryRun bool, cluster string, sink *execRun) {
 	defer func() {
 		s.mu.Lock()
 		s.cleanupBusy = false
 		s.mu.Unlock()
+		s.invalidateManagedIndex()
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		st, err := s.computeCleanupStatus(ctx, template)
+		cancel()
+		if err == nil {
+			s.publishCleanup(st)
+		} else {
+			s.eventBus().Publish("cleanup", cluster, template, map[string]any{
+				"cleaning": false,
+				"cluster":  cluster,
+			})
+		}
 	}()
+
+	s.eventBus().Publish("cleanup", cluster, template, map[string]any{
+		"cleaning": true,
+		"cluster":  cluster,
+		"scope":    scope,
+	})
 
 	var logLines []report.CleanupLogLine
 	logf := func(level, msg string) {
@@ -522,18 +563,10 @@ func (s *Server) runCleanupJob(cl kube.Cluster, runIDs []string, scope, template
 	seenNS := map[string]bool{}
 
 	for _, rid := range runIDs {
-		if snap, err := cl.ListManaged(ctx, rid); err == nil {
-			totals.Namespaces += snap.Namespaces
-			totals.Services += snap.Services
-			totals.Routes += snap.Routes
-			totals.Deployments += snap.Deployments
-			totals.Pods += snap.Pods
-		}
 		nsCount := 0
-		if wait && !dryRun {
-			if names, err := cl.ListManagedNamespaces(ctx, rid); err == nil {
-				nsCount = len(names)
-			}
+		if names, err := cl.ListManagedNamespaces(ctx, rid); err == nil {
+			nsCount = len(names)
+			totals.Namespaces += nsCount
 		}
 		waitTO := runner.CleanupWaitTimeout(nsCount)
 		if nsCount > 0 {

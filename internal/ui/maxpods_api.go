@@ -99,7 +99,8 @@ func (s *Server) getWorkerMaxPods(w http.ResponseWriter, r *http.Request) {
 		"server":  target.Server,
 		"source":  target.Source,
 		"maxPods": st,
-		"run":     sink.snapshot(),
+		"run":     sink.snapshotSlim(),
+		"stream":  eventsPath,
 		"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
@@ -156,9 +157,10 @@ func (s *Server) postWorkerMaxPods(w http.ResponseWriter, r *http.Request) {
 		"async":    true,
 		"maxPods":  body.MaxPods,
 		"cluster":  target.Name,
-		"run":      sink.snapshot(),
+		"run":      sink.snapshotSlim(),
+		"stream":   eventsPath,
 		"warning":  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
-		"note":     "Cleans managed namespaces, sets worker MCP maxUnavailable=1, applies KubeletConfig. Watch the live log.",
+		"note":     "Cleans managed namespaces, sets worker MCP maxUnavailable=1, applies KubeletConfig. Watch the live log over SSE.",
 	})
 
 	go s.runMaxPodsJob(live, target, body.MaxPods, sink)

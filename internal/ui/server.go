@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -31,6 +32,14 @@ type Server struct {
 	exec           *execManager
 	cleanupBusy    bool
 	ovnBase        *ovndiag.Baseline
+	bus            *EventBus
+	ovnQ           chan ovnJob
+	ovnMu          sync.Mutex
+	indexMu        sync.Mutex
+	indexAt        time.Time
+	indexCluster   string
+	indexMetas     []nsMeta
+	indexErr       error
 }
 
 func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *auth.Service) *Server {
@@ -72,6 +81,7 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/cluster/login", s.admin(s.addClusterLogin))
 	s.Mux.Handle("/api/v1/cluster/capacity", s.admin(s.clusterCapacityAPI))
 	s.Mux.Handle("/api/v1/cluster/maxpods", s.admin(s.clusterMaxPodsAPI))
+	s.Mux.Handle("/api/v1/events", s.guest(s.eventsAPI))
 	s.Mux.Handle("/api/v1/runs", s.allowGuest(s.runs, http.MethodGet))
 	s.Mux.Handle("/api/v1/runs/", s.allowGuest(s.runAction, http.MethodGet))
 	s.Mux.Handle("/api/v1/cleanup", s.allowGuest(s.cleanupAPI, http.MethodGet))
@@ -85,6 +95,10 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/ovndiag/history", s.guest(s.ovndiagHistoryAPI))
 	s.Mux.Handle("/api/v1/ovndiag/history/", s.guest(s.ovndiagHistoryAPI))
 	s.Mux.HandleFunc("/", s.spa)
+	s.bus = NewEventBus()
+	s.ovnQ = make(chan ovnJob, 4)
+	go s.loopOVNWorker()
+	go s.loopStatusPublisher()
 	return s
 }
 
@@ -180,16 +194,18 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
-	ctx := r.Context()
-	snap, err := cl.ListManaged(ctx, g.RunID)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	names, err := cl.ListManagedNamespaces(ctx, g.RunID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"runId":       g.RunID,
-		"convergence": kube.ComputeConvergence(g.Counts, snap),
-		"sampledAt":   time.Now(),
+		"runId":     g.RunID,
+		"namespaces": len(names),
+		"sampledAt": time.Now(),
+		"note":      "counts are namespace-only; object tallies are not listed on the request path",
 	})
 }
 

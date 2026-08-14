@@ -130,7 +130,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 
 	var live []liveRunRow
 	var managedTotal int
-	if st, err := s.computeCleanupStatus(r, ""); err == nil && st != nil {
+	if st, err := s.computeCleanupStatus(r.Context(), ""); err == nil && st != nil {
 		live = st.LiveRuns
 		managedTotal = st.ManagedTotal
 	}
