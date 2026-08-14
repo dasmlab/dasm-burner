@@ -309,7 +309,7 @@ func severitiesToState(fs []Finding) []HealthState {
 		case SevWarning:
 			out = append(out, StateWarning)
 		case SevNotice:
-			out = append(out, StateDegraded)
+			// Informational log classes must not flip overall to DEGRADED.
 		}
 	}
 	return out

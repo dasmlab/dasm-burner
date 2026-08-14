@@ -11,15 +11,28 @@
       </div>
     </div>
 
-    <div class="row items-center q-gutter-sm q-mb-md">
+    <div class="row items-center q-gutter-sm q-mb-sm">
       <q-btn outline color="primary" label="Capture baseline" :loading="busy" @click="captureBaseline" />
       <q-btn unelevated color="primary" icon="refresh" label="Sample now" :loading="busy" @click="sample" />
       <q-btn flat color="primary" icon="history" label="Reload latest" :loading="busy" @click="loadLatest" />
       <q-badge v-if="snap?.overallState" :color="stateColor" text-color="white">{{ snap.overallState }}</q-badge>
       <span v-if="snap?.baselineAt" class="text-caption text-grey-7">baseline {{ fmt(snap.baselineAt) }}</span>
     </div>
+    <p class="text-caption text-grey-7 q-mb-md">
+      Sample / baseline can take 30–90s (nodes + OVN pods + events + log tails). A short axios timeout used to look like a Network Error — wait for the button spinner.
+    </p>
 
+    <div v-if="notice" class="dasm-panel q-mb-md text-positive">{{ notice }}</div>
     <div v-if="error" class="dasm-panel q-mb-md text-negative">{{ error }}</div>
+
+    <div class="dasm-panel q-mb-md">
+      <div class="dasm-stat-label q-mb-xs">What baseline captures</div>
+      <ul class="detail-list">
+        <li><strong>What:</strong> watermarks for ovnkube-node restart counts, per-node Ready, and (when metrics API exists) CPU/mem per container — used later for Δ.</li>
+        <li><strong>Where:</strong> in-memory on this pod + immutable snapshot on the data PVC under <code>ovndiag/&lt;id&gt;/snapshot.json</code>.</li>
+        <li><strong>Cluster:</strong> {{ clusterLabel }} · baseline {{ baselineLabel }}</li>
+      </ul>
+    </div>
 
     <div v-if="snap" class="dasm-panel q-mb-md">
       <div class="row q-col-gutter-md">
@@ -43,10 +56,49 @@
       <div v-if="snap.why" class="q-mt-md"><strong>Why?</strong> {{ snap.why }}</div>
     </div>
 
+    <div class="dasm-panel q-mb-md">
+      <div class="row items-center justify-between q-mb-sm">
+        <div class="dasm-stat-label">Sample history</div>
+        <span class="text-caption text-grey-7">{{ samples.length }} stored · click a row to inspect</span>
+      </div>
+      <table class="ovn-table">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Kind</th>
+            <th>State</th>
+            <th>Nodes</th>
+            <th>Findings</th>
+            <th>Run</th>
+            <th>Id</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="row in samples"
+            :key="row.id"
+            :class="{ 'is-sel': row.id === selectedSampleId }"
+            @click="openSample(row.id)"
+          >
+            <td class="text-mono">{{ fmt(row.generatedAt) }}</td>
+            <td>{{ row.kind }}</td>
+            <td>{{ row.overallState }}</td>
+            <td>{{ row.nodeCount }}</td>
+            <td>{{ row.findingCount }}</td>
+            <td class="text-mono">{{ row.runId || '—' }}</td>
+            <td class="text-mono">{{ shortId(row.id) }}</td>
+          </tr>
+          <tr v-if="!samples.length">
+            <td colspan="7" class="text-grey-7">No samples yet — Capture baseline or Sample now.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
     <div class="row q-col-gutter-md">
       <div class="col-12 col-lg-7">
         <div class="dasm-panel">
-          <div class="dasm-stat-label q-mb-sm">Per-node health</div>
+          <div class="dasm-stat-label q-mb-sm">Per-node health (selected sample)</div>
           <table class="ovn-table">
             <thead>
               <tr>
@@ -54,11 +106,11 @@
                 <th>State</th>
                 <th>Ready</th>
                 <th>Annots</th>
-            <th>DB</th>
-            <th>DP</th>
-            <th>OVN pod</th>
-            <th>Δ rst</th>
-            <th>CPU (Σ)</th>
+                <th>DB</th>
+                <th>DP</th>
+                <th>OVN pod</th>
+                <th>Δ rst</th>
+                <th>CPU (Σ)</th>
               </tr>
             </thead>
             <tbody>
@@ -93,29 +145,31 @@
             <li v-for="r in (nodeDetail.ovnKube?.resources || [])" :key="r.container">
               {{ r.container }}: {{ Number(r.cpuCores || 0).toFixed(3) }}c · {{ Number(r.memoryMiB || 0).toFixed(0) }}Mi
             </li>
-            <li v-for="f in (nodeDetail.findings || [])" :key="f.id">
-              <q-badge dense :color="sevColor(f.severity)" text-color="white">{{ f.ruleId }}</q-badge>
-              {{ f.summary }}
-            </li>
           </ul>
         </div>
         <div class="dasm-panel q-mb-md">
           <div class="dasm-stat-label q-mb-sm">Findings</div>
           <ul class="detail-list">
             <li v-for="f in findings" :key="f.id">
-              <q-badge dense :color="sevColor(f.severity)" text-color="white">{{ f.ruleId }}</q-badge>
-              {{ f.summary }}
-              <span class="text-grey-7" v-if="f.node"> · {{ f.node }}</span>
+              <div>
+                <q-badge dense :color="sevColor(f.severity)" text-color="white">{{ f.ruleId }}</q-badge>
+                <strong class="q-ml-xs">{{ ruleTitle(f.ruleId) }}</strong>
+                <span class="text-grey-7" v-if="f.node"> · {{ f.node }}</span>
+              </div>
+              <div>{{ f.summary }}</div>
+              <div class="text-caption text-grey-7">{{ ruleAbout(f.ruleId) }}</div>
+              <div class="text-caption" v-if="f.why">{{ f.why }}</div>
             </li>
-            <li v-if="!findings.length" class="text-grey-7">No warning+ findings in latest sample.</li>
+            <li v-if="!findings.length" class="text-grey-7">No warning+ findings in selected sample.</li>
           </ul>
         </div>
         <div class="dasm-panel">
-          <div class="dasm-stat-label q-mb-sm">Timeline</div>
+          <div class="dasm-stat-label q-mb-sm">Events in this sample</div>
           <ul class="detail-list">
             <li v-for="(t, i) in (snap?.timeline || []).slice(0, 20)" :key="i">
               <span class="text-mono">{{ fmt(t.at) }}</span> · {{ t.summary }}
             </li>
+            <li v-if="!(snap?.timeline || []).length" class="text-grey-7">No timeline events in this snapshot.</li>
           </ul>
         </div>
       </div>
@@ -125,12 +179,25 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { baselineOVNDiag, getOVNDiag, sampleOVNDiag } from 'src/services/api'
+import {
+  baselineOVNDiag,
+  getOVNDiag,
+  getOVNDiagSnapshot,
+  listOVNDiagHistory,
+  sampleOVNDiag,
+} from 'src/services/api'
+import { useCluster } from 'src/services/cluster'
 
+const cluster = useCluster()
 const busy = ref(false)
 const error = ref('')
+const notice = ref('')
 const snap = ref(null)
+const samples = ref([])
+const rules = ref({})
+const baselineMeta = ref(null)
 const selectedNode = ref('')
+const selectedSampleId = ref('')
 
 const stateColor = computed(() => {
   switch (snap.value?.overallState) {
@@ -150,6 +217,12 @@ const findings = computed(() =>
   (snap.value?.findings || []).filter((f) => ['WARNING', 'ERROR', 'CRITICAL', 'NOTICE'].includes(f.severity)).slice(0, 40),
 )
 const nodeDetail = computed(() => (snap.value?.nodes || []).find((n) => n.nodeName === selectedNode.value) || null)
+const clusterLabel = computed(() => cluster.currentLabel?.value || snap.value?.cluster || '—')
+const baselineLabel = computed(() => {
+  if (baselineMeta.value?.at) return fmt(baselineMeta.value.at)
+  if (snap.value?.baselineAt) return fmt(snap.value.baselineAt)
+  return 'not captured yet'
+})
 
 function sevColor(sev) {
   if (sev === 'CRITICAL' || sev === 'ERROR') return 'negative'
@@ -162,6 +235,10 @@ function fmt(at) {
 function shortPod(n) {
   if (!n) return '—'
   return n.length > 22 ? n.slice(0, 20) + '…' : n
+}
+function shortId(id) {
+  if (!id) return '—'
+  return id.length > 28 ? id.slice(0, 26) + '…' : id
 }
 function dbLabel(d) {
   if (!d?.present) return '—'
@@ -178,16 +255,63 @@ function cpuSum(resources) {
   const s = resources.reduce((a, r) => a + (r.cpuCores || 0), 0)
   return s.toFixed(2) + 'c'
 }
+function ruleTitle(id) {
+  return rules.value?.[id]?.title || id
+}
+function ruleAbout(id) {
+  return rules.value?.[id]?.about || ''
+}
+function applyPayload(data, { preferId } = {}) {
+  if (data?.snapshot) snap.value = data.snapshot
+  if (data?.samples) samples.value = data.samples
+  if (data?.rules) rules.value = data.rules
+  if (data?.baseline) baselineMeta.value = data.baseline
+  if (preferId) selectedSampleId.value = preferId
+  else if (data?.snapshotId) selectedSampleId.value = data.snapshotId
+  if (!selectedNode.value && snap.value?.nodes?.[0]) selectedNode.value = snap.value.nodes[0].nodeName
+}
+function errText(e) {
+  if (e.code === 'ECONNABORTED' || /timeout/i.test(e.message || '')) {
+    return 'Request timed out waiting for OVN sample (cluster interrogation can take >30s). Try again — timeout is now 120s.'
+  }
+  if (e.message === 'Network Error') {
+    return 'Network Error — often a route/proxy cut during a long sample. Wait and Sample now again; if it persists, check the preview pod logs.'
+  }
+  return e.response?.data?.error || e.message
+}
 
 async function loadLatest() {
   busy.value = true
   error.value = ''
+  notice.value = ''
   try {
     const data = await getOVNDiag()
-    snap.value = data.snapshot
-    if (!selectedNode.value && snap.value?.nodes?.[0]) selectedNode.value = snap.value.nodes[0].nodeName
+    applyPayload(data)
   } catch (e) {
-    error.value = e.response?.data?.error || e.message
+    error.value = errText(e)
+  } finally {
+    busy.value = false
+  }
+}
+async function refreshHistory() {
+  try {
+    const data = await listOVNDiagHistory()
+    if (data?.samples) samples.value = data.samples
+    if (data?.rules) rules.value = data.rules
+  } catch {
+    /* non-fatal */
+  }
+}
+async function openSample(id) {
+  if (!id) return
+  busy.value = true
+  error.value = ''
+  try {
+    const data = await getOVNDiagSnapshot(id)
+    applyPayload(data, { preferId: id })
+    notice.value = `Loaded sample ${shortId(id)}`
+  } catch (e) {
+    error.value = errText(e)
   } finally {
     busy.value = false
   }
@@ -195,11 +319,14 @@ async function loadLatest() {
 async function sample() {
   busy.value = true
   error.value = ''
+  notice.value = 'Sampling cluster…'
   try {
     const data = await sampleOVNDiag({})
-    snap.value = data.snapshot
+    applyPayload(data)
+    notice.value = `Sample stored${data.snapshotId ? ` · ${data.snapshotId}` : ''}. History table updated.`
   } catch (e) {
-    error.value = e.response?.data?.error || e.message
+    notice.value = ''
+    error.value = errText(e)
   } finally {
     busy.value = false
   }
@@ -207,11 +334,22 @@ async function sample() {
 async function captureBaseline() {
   busy.value = true
   error.value = ''
+  notice.value = 'Capturing baseline watermarks…'
   try {
     const data = await baselineOVNDiag()
-    snap.value = data.snapshot
+    applyPayload(data)
+    const c = data.captured || {}
+    notice.value = [
+      'Baseline captured.',
+      `Nodes=${c.nodes ?? '—'}`,
+      `ovnkube pods=${c.ovnkubePods ?? '—'}`,
+      `at ${fmt(c.at || data.baselineAt)}`,
+      `stored as ${data.snapshotId || 'snapshot'} on PVC.`,
+    ].join(' ')
+    await refreshHistory()
   } catch (e) {
-    error.value = e.response?.data?.error || e.message
+    notice.value = ''
+    error.value = errText(e)
   } finally {
     busy.value = false
   }
@@ -239,6 +377,6 @@ onMounted(loadLatest)
   padding-left: 1rem;
   font-size: 0.85rem;
 }
-.detail-list li { margin-bottom: 0.3rem; }
+.detail-list li { margin-bottom: 0.45rem; }
 .text-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 </style>

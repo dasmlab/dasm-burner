@@ -191,9 +191,10 @@ func classifyLog(low string) string {
 	for _, name := range order {
 		for _, n := range byName[name] {
 			if strings.Contains(low, n) {
-				// Skip noisy info-level "ovn" hits unless error/warn also present
-				if name == "OVN" || name == "OVS" {
-					if !(strings.Contains(low, "error") || strings.Contains(low, "warn") || strings.Contains(low, "fail")) {
+				// Skip noisy info-level hits unless error/warn/fail also present.
+				if name == "OVN" || name == "OVS" || name == "IPTABLES" || name == "FLOW" || name == "GATEWAY" {
+					if !(strings.Contains(low, "error") || strings.Contains(low, "warn") ||
+						strings.Contains(low, "fail") || strings.Contains(low, "drop")) {
 						continue
 					}
 				}

@@ -86,6 +86,14 @@
           <q-toggle v-model="confirm" label="I understand this loads the control plane" :disable="running || dryRun" />
           <q-toggle v-model="allowLarge" label="Allow >10 namespaces" :disable="running || dryRun" />
           <q-toggle v-model="skipBaseline" label="Skip baseline wait" :disable="running" />
+          <q-toggle
+            v-model="enableOVNDiag"
+            label="Enable OVN Diagnoser samples"
+            :disable="running || dryRun"
+          />
+          <div class="text-caption text-grey-7 q-mb-sm">
+            When on: capture OVN baseline, 45s watch, and per-batch samples for the OVN Diagnoser history page.
+          </div>
           <div class="dasm-stat-label q-mt-md q-mb-xs">Do not tolerate (taints)</div>
           <q-select
             v-model="avoidTaints"
@@ -352,6 +360,7 @@ const dryRun = ref(true)
 const confirm = ref(false)
 const allowLarge = ref(false)
 const skipBaseline = ref(true)
+const enableOVNDiag = ref(true)
 const avoidTaints = ref(['node-role.kubernetes.io=infra:NoSchedule'])
 const avoidTaintOptions = [
   'node-role.kubernetes.io=infra:NoSchedule',
@@ -611,6 +620,7 @@ async function start() {
       confirm: confirm.value,
       allowLarge: allowLarge.value,
       skipBaseline: skipBaseline.value,
+      enableOVNDiag: enableOVNDiag.value,
       avoidTaints: [...avoidTaints.value],
     }
     let data

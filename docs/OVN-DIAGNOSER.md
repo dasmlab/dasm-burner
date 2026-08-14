@@ -20,7 +20,8 @@ First-class component on the `development` branch. **Not** a kube-burner metrics
 | L7 | Batch correlation (OVN603) | yes |
 | — | Warning event aggregation | yes |
 | — | Targeted log class scanner | yes |
-| — | Continuous watch during Execute (45s) | yes |
+| — | Continuous watch during Execute (45s) | yes (Execute toggle) |
+| — | Sample history table + rule catalog | yes |
 
 ## Package
 

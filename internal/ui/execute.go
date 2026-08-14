@@ -153,13 +153,14 @@ func (s *Server) runAction(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Template           string   `json:"template"`
-		DryRun             bool     `json:"dryRun"`
-		Confirm            bool     `json:"confirm"`
-		AllowLarge         bool     `json:"allowLarge"`
-		AllowOverCapacity  bool     `json:"allowOverCapacity"`
-		SkipBase           bool     `json:"skipBaseline"`
-		AvoidTaints        []string `json:"avoidTaints"`
+		Template          string   `json:"template"`
+		DryRun            bool     `json:"dryRun"`
+		Confirm           bool     `json:"confirm"`
+		AllowLarge        bool     `json:"allowLarge"`
+		AllowOverCapacity bool     `json:"allowOverCapacity"`
+		SkipBase          bool     `json:"skipBaseline"`
+		EnableOVNDiag     *bool    `json:"enableOVNDiag"`
+		AvoidTaints       []string `json:"avoidTaints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -307,13 +308,24 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 			" · nodeAffinity excludes matching infra/role labels")
 	}
 
-	go s.executeRun(ctx, run, cfg, g, body.DryRun, body.SkipBase, target)
+	enableOVN := true
+	if body.EnableOVNDiag != nil {
+		enableOVN = *body.EnableOVNDiag
+	}
+	if enableOVN {
+		run.appendLog("info", "OVNDIAG", 0, "diagnoser samples ENABLED for this run (baseline + watch + per-batch)")
+	} else {
+		run.appendLog("info", "OVNDIAG", 0, "diagnoser samples DISABLED for this run")
+	}
+
+	go s.executeRun(ctx, run, cfg, g, body.DryRun, body.SkipBase, enableOVN, target)
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"run":         run.snapshot(),
-		"avoidTaints": cfg.Application.AvoidTaints,
-		"cluster":     target,
-		"capacity":    capacity,
-		"warning":     "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+		"run":           run.snapshot(),
+		"avoidTaints":   cfg.Application.AvoidTaints,
+		"cluster":       target,
+		"capacity":      capacity,
+		"enableOVNDiag": enableOVN,
+		"warning":       "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
 
@@ -370,7 +382,7 @@ func SplitBatchCount(cfg *config.Config, ns int) int {
 	return plan.Count
 }
 
-func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun, skipBase bool, target clusterTarget) {
+func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun, skipBase, enableOVN bool, target clusterTarget) {
 	var (
 		lastRep     *runner.Report
 		openHealth  kube.Health
@@ -459,7 +471,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			run.appendLog("info", "OPEN", 0, fmt.Sprintf("health snapshot nodes Ready %d/%d OVN %d/%d restarts=%d",
 				h.NodesReady, h.NodesReady+h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts))
 		}
-		if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil {
+		if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil && enableOVN {
 			if snap, err := ovndiag.SampleLive(ctx, live.Clientset(), live.Dynamic(), nil, g.RunID, run.Cluster, 0); err == nil {
 				s.ovnBaseline().Capture(snap.Nodes)
 				snap.BaselineAt = s.ovnBaseline().At()
@@ -555,7 +567,7 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			run.appendLog("info", string(phase), batch, msg)
 			run.mapPhase(phase, batch, msg)
 			// OVN diagnoser: sample after each batch measurement + final (not kube-burner metrics).
-			if !dryRun && (phase == runner.PhaseBatchMeasurement || phase == runner.PhaseFinalMeasurement) {
+			if enableOVN && !dryRun && (phase == runner.PhaseBatchMeasurement || phase == runner.PhaseFinalMeasurement) {
 				if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil {
 					bid := batch
 					scanLogs := phase == runner.PhaseFinalMeasurement || batch%3 == 0

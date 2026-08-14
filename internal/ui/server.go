@@ -82,6 +82,8 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/ovndiag", s.protect(s.ovndiagAPI))
 	s.Mux.Handle("/api/v1/ovndiag/baseline", s.protect(s.ovndiagBaselineAPI))
 	s.Mux.Handle("/api/v1/ovndiag/sample", s.protect(s.ovndiagSample))
+	s.Mux.Handle("/api/v1/ovndiag/history", s.protect(s.ovndiagHistoryAPI))
+	s.Mux.Handle("/api/v1/ovndiag/history/", s.protect(s.ovndiagHistoryAPI))
 	s.Mux.HandleFunc("/", s.spa)
 	return s
 }
