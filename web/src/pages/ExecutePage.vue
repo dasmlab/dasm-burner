@@ -199,6 +199,78 @@
       </div>
     </div>
 
+    <div class="dasm-panel q-mb-md">
+      <div class="row items-center justify-between q-mb-sm">
+        <div class="dasm-stat-label">Worker kubelet (this cluster)</div>
+        <div class="text-caption text-grey-7">
+          Density slots {{ capSlotsLabel }} · typical maxPods {{ capacity?.capacity?.maxPodsTypical ?? '…' }}
+        </div>
+      </div>
+      <div class="text-caption text-grey-7 q-mb-sm">
+        Replicas stay in the Topology template. This only changes OpenShift worker
+        <code>maxPods</code> (KubeletConfig) so Execute precheck can fit.
+      </div>
+      <div class="row items-end q-col-gutter-sm">
+        <div class="col-12 col-sm-3">
+          <q-input
+            v-model.number="maxPodsInput"
+            type="number"
+            outlined
+            dense
+            label="maxPods"
+            min="110"
+            max="2000"
+            :disable="running || cleaning || settingMaxPods"
+          />
+        </div>
+        <div class="col-12 col-sm-auto">
+          <q-btn
+            outline
+            color="primary"
+            icon="memory"
+            label="Set worker maxPods"
+            :loading="settingMaxPods"
+            :disable="running || cleaning"
+            @click="openMaxPodsDialog"
+          />
+        </div>
+      </div>
+    </div>
+
+    <q-dialog v-model="maxPodsOpen" persistent>
+      <q-card style="min-width: 480px; max-width: 640px">
+        <q-card-section>
+          <div class="text-h6">Set workers to maxPods={{ maxPodsInput }}?</div>
+        </q-card-section>
+        <q-card-section class="text-body2">
+          <p>
+            On <strong>{{ cluster.currentLabel.value }}</strong> this will:
+          </p>
+          <ol>
+            <li>Delete all managed <code>kb-*</code> namespaces on this cluster (required before the kubelet roll).</li>
+            <li>Set the worker MachineConfigPool to serial (<code>maxUnavailable=1</code>) so nodes reboot one at a time.</li>
+            <li>Apply KubeletConfig <code>dasm-burner-worker-maxpods</code> with <code>maxPods={{ maxPodsInput }}</code>.</li>
+          </ol>
+          <p>
+            Worker-labeled nodes (including infra) will drain and reboot in series. This can take a long time.
+            Watch the live log. NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT.
+          </p>
+          <p v-if="projectedSlots" class="text-caption">
+            After roll: ~{{ projectedSlots }} density slots
+            <span v-if="selectedMeta?.counts?.pods">
+              vs this template’s {{ selectedMeta.counts.pods }} pods
+              <span v-if="projectedSlots >= selectedMeta.counts.pods"> — precheck should pass</span>
+              <span v-else> — still short; raise maxPods further, add workers, or lower replicas in Topology</span>
+            </span>
+          </p>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" v-close-popup />
+          <q-btn unelevated color="primary" label="Accept and apply" :loading="settingMaxPods" @click="applyMaxPods" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <div class="row q-col-gutter-md">
       <div class="col-12 col-lg-5">
         <div class="dasm-panel">
@@ -258,10 +330,12 @@ import {
   checkCleanupState,
   clearRunLog,
   getCleanupStatus,
+  getClusterCapacity,
   getRun,
   listCleanupReports,
   listTemplates,
   postCleanup,
+  postWorkerMaxPods,
   selectTemplate,
   startRun,
 } from 'src/services/api'
@@ -291,6 +365,10 @@ const logEl = ref(null)
 const deploy = ref(null)
 const managedTotal = ref(null)
 const deployCluster = ref('')
+const capacity = ref(null)
+const maxPodsInput = ref(500)
+const maxPodsOpen = ref(false)
+const settingMaxPods = ref(false)
 let timer = null
 let cleanupPoll = null
 
@@ -336,6 +414,17 @@ const deployChipColor = computed(() => {
   if (deploy.value?.label === 'cleaned') return 'positive'
   return 'grey-6'
 })
+const capSlotsLabel = computed(() => {
+  const c = capacity.value?.capacity
+  if (!c) return '…'
+  return `${c.slots ?? '?'} (${c.workerNodes ?? '?'} nodes)`
+})
+const projectedSlots = computed(() => {
+  const nodes = capacity.value?.capacity?.workerNodes
+  const n = Number(maxPodsInput.value)
+  if (!nodes || !n) return 0
+  return nodes * n
+})
 const statusColor = computed(() => {
   switch (runStatus.value) {
     case 'running': return 'warning'
@@ -352,6 +441,62 @@ function fmt(at) {
     return new Date(at).toLocaleTimeString()
   } catch {
     return ''
+  }
+}
+
+async function refreshCapacity() {
+  try {
+    capacity.value = await getClusterCapacity()
+    const typical = capacity.value?.capacity?.maxPodsTypical
+    if (typical && !maxPodsOpen.value) {
+      maxPodsInput.value = typical < 500 ? 500 : typical
+    }
+  } catch {
+    /* cluster may be unset */
+  }
+}
+
+function openMaxPodsDialog() {
+  error.value = ''
+  const n = Number(maxPodsInput.value)
+  if (!n || n < 110 || n > 2000) {
+    error.value = 'maxPods must be between 110 and 2000'
+    return
+  }
+  maxPodsOpen.value = true
+}
+
+async function applyMaxPods() {
+  error.value = ''
+  cleanupMsg.value = ''
+  settingMaxPods.value = true
+  cleaning.value = true
+  startCleanupPoll()
+  try {
+    const expected = cluster.currentName.value
+    await cluster.assertCurrent(expected)
+    const data = await postWorkerMaxPods({
+      maxPods: Number(maxPodsInput.value),
+      confirm: true,
+    })
+    if (data.run) run.value = data.run
+    maxPodsOpen.value = false
+    cleanupMsg.value = `Worker maxPods=${maxPodsInput.value} started on ${data.cluster || cluster.currentLabel.value} — watch live log for serial MCP roll.`
+    const deadline = Date.now() + 100 * 60 * 1000
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 4000))
+      await poll()
+      const st = await getCleanupStatus(templateName.value).catch(() => null)
+      if (st && !st.cleaning) break
+    }
+    await refreshCapacity()
+    await refreshDeploy()
+  } catch (e) {
+    error.value = e.response?.data?.error || e.message
+  } finally {
+    stopCleanupPoll()
+    settingMaxPods.value = false
+    cleaning.value = false
   }
 }
 
@@ -604,6 +749,7 @@ watch(
   async (name, prev) => {
     if (!name || name === prev) return
     await checkState(`cluster switched to ${name}`)
+    await refreshCapacity()
   },
 )
 
@@ -613,6 +759,7 @@ onMounted(async () => {
     if (!cluster.ready.value) await cluster.refresh()
     await poll()
     await checkState('page load')
+    await refreshCapacity()
   } catch (e) {
     error.value = e.response?.data?.error || e.message
   }

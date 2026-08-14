@@ -33,6 +33,14 @@ func (l *Live) Clientset() kubernetes.Interface {
 	return l.cs
 }
 
+// Dynamic exposes the unstructured client (OpenShift MachineConfig / KubeletConfig).
+func (l *Live) Dynamic() dynamic.Interface {
+	if l == nil {
+		return nil
+	}
+	return l.dyn
+}
+
 func (l *Live) CreateNamespace(ctx context.Context, ns *corev1.Namespace) error {
 	_, err := l.cs.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	return err
