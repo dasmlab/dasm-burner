@@ -460,14 +460,41 @@ async function start() {
       if (!ok) return
     }
     await selectTemplate(templateName.value)
-    const data = await startRun({
+    const payload = {
       template: templateName.value,
       dryRun: dryRun.value,
       confirm: confirm.value,
       allowLarge: allowLarge.value,
       skipBaseline: skipBaseline.value,
       avoidTaints: [...avoidTaints.value],
-    })
+    }
+    let data
+    try {
+      data = await startRun(payload)
+    } catch (e) {
+      const body = e.response?.data
+      if (body?.code === 'capacity_exceeded') {
+        const cap = body.capacity || {}
+        const detail = [
+          body.error || 'Run exceeds density pod slots.',
+          '',
+          `Slots: ${cap.slots ?? '?'} (${cap.workerNodes ?? '?'} nodes × ~${cap.maxPodsTypical ?? '?'} maxPods)`,
+          `Run wants: ${cap.podsAsked ?? '?'} pods`,
+          `Largest wave: ~${cap.wavePods ?? '?'} pods (${cap.waveNamespaces ?? '?'} NS)`,
+          '',
+          'Better: raise maxPods, add workers, or lower replicasPerService.',
+          '',
+          'Proceed anyway? (expect readiness timeouts / Unschedulable)',
+        ].join('\n')
+        if (!window.confirm(detail)) {
+          error.value = body.error || 'capacity exceeded'
+          return
+        }
+        data = await startRun({ ...payload, allowOverCapacity: true })
+      } else {
+        throw e
+      }
+    }
     run.value = data.run
   } catch (e) {
     error.value = e.response?.data?.error || e.message

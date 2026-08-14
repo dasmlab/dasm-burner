@@ -152,12 +152,13 @@ func (s *Server) runAction(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Template    string   `json:"template"`
-		DryRun      bool     `json:"dryRun"`
-		Confirm     bool     `json:"confirm"`
-		AllowLarge  bool     `json:"allowLarge"`
-		SkipBase    bool     `json:"skipBaseline"`
-		AvoidTaints []string `json:"avoidTaints"`
+		Template           string   `json:"template"`
+		DryRun             bool     `json:"dryRun"`
+		Confirm            bool     `json:"confirm"`
+		AllowLarge         bool     `json:"allowLarge"`
+		AllowOverCapacity  bool     `json:"allowOverCapacity"`
+		SkipBase           bool     `json:"skipBaseline"`
+		AvoidTaints        []string `json:"avoidTaints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -202,6 +203,39 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	if terr != nil {
 		writeError(w, http.StatusBadRequest, terr)
 		return
+	}
+
+	var capacity kube.DensityCapacity
+	if !body.DryRun {
+		qps := float32(cfg.Deployment.APIConcurrency)
+		if qps < 20 {
+			qps = 20
+		}
+		cl, cerr := target.client(qps, int(qps)*2)
+		if cerr != nil {
+			writeError(w, http.StatusServiceUnavailable, cerr)
+			return
+		}
+		live, ok := cl.(*kube.Live)
+		if !ok || live.Clientset() == nil {
+			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("capacity precheck requires a live cluster client"))
+			return
+		}
+		podsPerNS := 0
+		if g.Counts.Namespaces > 0 {
+			podsPerNS = g.Counts.Pods / g.Counts.Namespaces
+		}
+		capCtx, capCancel := context.WithTimeout(r.Context(), 20*time.Second)
+		capacity, cerr = kube.EvaluateDensityCapacity(capCtx, live.Clientset(), cfg.Application.AvoidTaints, g.Counts.Pods, batchPlan.Size, podsPerNS)
+		capCancel()
+		if cerr != nil {
+			writeError(w, http.StatusServiceUnavailable, fmt.Errorf("capacity precheck: %w", cerr))
+			return
+		}
+		if err := kube.CheckDensityFit(capacity, body.AllowOverCapacity); err != nil {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
 	}
 
 	m := s.execMgr()
@@ -249,6 +283,16 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 
 	run.appendLog("info", "PREFIX", 0, fmt.Sprintf("common prefix %s · pattern %s-ns-00001-xxxx", pfx, pfx))
 	run.appendLog("info", "TARGET", 0, target.logLine())
+	if capacity.Summary != "" {
+		lvl := "info"
+		if !capacity.FitsRun || !capacity.FitsWave {
+			lvl = "warn"
+		}
+		run.appendLog(lvl, "CAPACITY", 0, capacity.Summary)
+		if body.AllowOverCapacity && (!capacity.FitsRun || !capacity.FitsWave) {
+			run.appendLog("warn", "CAPACITY", 0, "proceeding despite over-capacity (allowOverCapacity=true)")
+		}
+	}
 	run.appendLog("info", "BATCH", 0, fmt.Sprintf("%s · size=%d waves=%d · %s",
 		batchPlan.Strategy, batchPlan.Size, batchPlan.Count, batchPlan.Reason))
 	if len(cfg.Application.AvoidTaints) == 0 {
@@ -267,6 +311,7 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 		"run":         run.snapshot(),
 		"avoidTaints": cfg.Application.AvoidTaints,
 		"cluster":     target,
+		"capacity":    capacity,
 		"warning":     "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }

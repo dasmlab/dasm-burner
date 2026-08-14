@@ -227,6 +227,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
+	if ce, ok := err.(*kube.CapacityExceededError); ok {
+		writeJSON(w, status, map[string]any{
+			"error":    ce.Error(),
+			"code":     "capacity_exceeded",
+			"capacity": ce.Capacity,
+		})
+		return
+	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
