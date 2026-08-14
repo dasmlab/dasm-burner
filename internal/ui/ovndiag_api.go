@@ -86,8 +86,8 @@ func (s *Server) ovndiagBaselineAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) ovndiagGet(w http.ResponseWriter, r *http.Request) {
+	sums, _ := ovndiag.ListSummaries(s.RunDir, 50)
 	if snap, err := ovndiag.LoadLatest(s.RunDir); err == nil && snap != nil {
-		sums, _ := ovndiag.ListSummaries(s.RunDir, 50)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"snapshot": snap,
 			"cached":   true,
@@ -97,16 +97,9 @@ func (s *Server) ovndiagGet(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	snap, err := s.runOVNSample(r, 0)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err)
-		return
-	}
-	_, _ = ovndiag.WriteSnapshot(s.RunDir, snap)
-	sums, _ := ovndiag.ListSummaries(s.RunDir, 50)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"snapshot": snap,
-		"cached":   false,
+		"snapshot": nil,
+		"cached":   true,
 		"samples":  sums,
 		"rules":    ovndiag.RuleCatalog,
 		"baseline": liveBaselineInfo(s),
@@ -184,14 +177,14 @@ func baselineCaptureSummary(snap *ovndiag.Snapshot) map[string]any {
 		}
 	}
 	return map[string]any{
-		"at":            snap.BaselineAt,
-		"nodes":         len(snap.Nodes),
-		"ovnkubePods":   pods,
-		"overallState":  snap.OverallState,
-		"findingCount":  len(snap.Findings),
-		"what":          "Restart / Ready / resource watermarks for later Δ comparison",
-		"where":         "Process memory (baseline) + PVC snapshot under /data/ovndiag/",
-		"cluster":       snap.Cluster,
-		"generatedAt":   snap.GeneratedAt.Format(time.RFC3339),
+		"at":           snap.BaselineAt,
+		"nodes":        len(snap.Nodes),
+		"ovnkubePods":  pods,
+		"overallState": snap.OverallState,
+		"findingCount": len(snap.Findings),
+		"what":         "Restart / Ready / resource watermarks for later Δ comparison",
+		"where":        "Process memory (baseline) + PVC snapshot under /data/ovndiag/",
+		"cluster":      snap.Cluster,
+		"generatedAt":  snap.GeneratedAt.Format(time.RFC3339),
 	}
 }

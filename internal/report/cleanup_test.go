@@ -37,6 +37,9 @@ func TestWriteListCleanupReport(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "cleanup-reports", id, "report.json")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "cleanup-reports", id, "summary.json")); err != nil {
+		t.Fatal(err)
+	}
 	list, err := ListCleanupReports(dir)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list=%v err=%v", list, err)

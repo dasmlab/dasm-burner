@@ -19,16 +19,47 @@
           style="min-width: 220px"
           @update:model-value="onClusterChange"
         />
-        <q-btn flat dense icon="add" label="Add" class="q-mr-md" @click="addOpen = true" />
-        <div class="text-caption q-mr-md">{{ auth.displayName.value }}</div>
         <q-btn
-          v-if="auth.authEnabled.value"
+          v-if="auth.isAdmin.value"
           flat
           dense
-          icon="logout"
-          label="Logout"
-          @click="auth.logout()"
+          icon="add"
+          label="Add"
+          class="q-mr-sm"
+          @click="addOpen = true"
         />
+        <q-btn
+          v-if="auth.isAdmin.value"
+          flat
+          dense
+          icon="remove_circle_outline"
+          label="Remove"
+          class="q-mr-md"
+          :disable="!removableClusters.length"
+          @click="removeOpen = true"
+        />
+        <template v-if="auth.authEnabled.value && !auth.isAuthenticated.value">
+          <q-btn flat dense icon="login" label="Sign in" @click="auth.login()" />
+        </template>
+        <template v-else>
+          <div class="text-caption q-mr-sm">{{ auth.displayName.value }}</div>
+          <q-chip
+            v-if="auth.authEnabled.value && !auth.isAdmin.value"
+            dense
+            square
+            color="white"
+            text-color="primary"
+            class="q-mr-sm"
+          >view only</q-chip>
+          <q-btn
+            v-if="auth.authEnabled.value"
+            flat
+            dense
+            icon="logout"
+            label="Logout"
+            @click="auth.logout()"
+          />
+        </template>
       </q-toolbar>
     </q-header>
 
@@ -123,12 +154,40 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <q-dialog v-model="removeOpen" persistent>
+      <q-card style="min-width: 420px; max-width: 560px">
+        <q-card-section>
+          <div class="text-h6">Remove a token cluster</div>
+          <div class="text-caption text-grey-7">
+            Drops a cluster added via login command from this dasm-burner instance.
+            In-cluster and file kubeconfig contexts stay.
+          </div>
+        </q-card-section>
+        <q-card-section>
+          <q-select
+            v-model="removeName"
+            :options="removableClusters"
+            dense
+            outlined
+            emit-value
+            map-options
+            label="Cluster to remove"
+          />
+          <p v-if="removeError" class="text-negative text-caption q-mt-sm">{{ removeError }}</p>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" v-close-popup @click="resetRemove" />
+          <q-btn color="negative" unelevated label="Remove" :loading="removing" :disable="!removeName" @click="submitRemove" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-layout>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { addClusterLogin, getVersion } from 'src/services/api'
+import { addClusterLogin, deleteCluster, getVersion } from 'src/services/api'
 import { useAuth } from 'src/services/auth'
 import { useCluster } from 'src/services/cluster'
 
@@ -138,10 +197,14 @@ const leftDrawerOpen = ref(false)
 const versionLabel = ref('…')
 const year = new Date().getFullYear()
 const addOpen = ref(false)
+const removeOpen = ref(false)
 const paste = ref('')
 const customName = ref('')
 const adding = ref(false)
 const addError = ref('')
+const removeName = ref('')
+const removing = ref(false)
+const removeError = ref('')
 
 const clusterName = computed({
   get: () => cluster.currentName.value,
@@ -160,6 +223,12 @@ const clusterOptions = computed(() =>
   })),
 )
 
+const removableClusters = computed(() =>
+  cluster.clusters.value
+    .filter((c) => c.source === 'login-command')
+    .map((c) => ({ label: `${c.name} · ${c.server || ''}`.trim(), value: c.name })),
+)
+
 async function onClusterChange(name) {
   if (!name || name === cluster.currentName.value) return
   try {
@@ -175,6 +244,27 @@ function resetAdd() {
   paste.value = ''
   customName.value = ''
   addError.value = ''
+}
+
+function resetRemove() {
+  removeName.value = ''
+  removeError.value = ''
+}
+
+async function submitRemove() {
+  if (!removeName.value) return
+  removing.value = true
+  removeError.value = ''
+  try {
+    await deleteCluster(removeName.value)
+    await cluster.refresh()
+    removeOpen.value = false
+    resetRemove()
+  } catch (e) {
+    removeError.value = e.response?.data?.error || e.message
+  } finally {
+    removing.value = false
+  }
 }
 
 async function submitAdd() {

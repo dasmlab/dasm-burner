@@ -37,25 +37,26 @@
             emit-value
             map-options
             @update:model-value="onKindChange"
+            :disable="!canAdmin"
           />
         </div>
         <div class="col-12 col-sm-4 col-md-2">
-          <q-input v-model="model.name" dense outlined label="Name" />
+          <q-input v-model="model.name" dense outlined label="Name" :disable="!canAdmin" />
         </div>
         <div class="col-6 col-sm-3 col-md-1">
-          <q-input v-model.number="model.namespaces" type="number" min="1" dense outlined label="NS" />
+          <q-input v-model.number="model.namespaces" type="number" min="1" dense outlined label="NS" :disable="!canAdmin" />
         </div>
         <div class="col-12 col-md-2">
-          <q-input v-model="saveAsName" dense outlined label="Save as (optional)" />
+          <q-input v-model="saveAsName" dense outlined label="Save as (optional)" :disable="!canAdmin" />
         </div>
         <div class="col-auto">
-          <q-btn color="primary" unelevated label="Save" :loading="saving" @click="save(false)" />
+          <q-btn color="primary" unelevated label="Save" :loading="saving" :disable="!canAdmin" @click="save(false)" />
         </div>
         <div class="col-auto">
-          <q-btn outline color="primary" label="Save as" :loading="saving" @click="save(true)" />
+          <q-btn outline color="primary" label="Save as" :loading="saving" :disable="!canAdmin" @click="save(true)" />
         </div>
         <div class="col-auto">
-          <q-btn flat color="negative" icon="delete" :disable="!activeName" @click="remove" />
+          <q-btn flat color="negative" icon="delete" :disable="!canAdmin || !activeName" @click="remove" />
         </div>
       </div>
       <div class="text-caption text-grey-7 q-mt-sm">
@@ -97,7 +98,7 @@
                   :class="{ on: o.enabled, active: selected === o.id }"
                   @click="selected = o.id"
                 >
-                  <q-toggle v-model="o.enabled" dense @click.stop />
+                  <q-toggle v-model="o.enabled" dense :disable="!canAdmin" @click.stop />
                   <div class="kind-row__meta">
                     <div class="kind-row__name">{{ o.kind || o.id }}</div>
                     <div class="kind-row__gvk">{{ o.apiVersion }}{{ o.clusterScoped ? ' · cluster' : '' }}</div>
@@ -110,7 +111,7 @@
                     outlined
                     input-class="text-right"
                     class="kind-row__n"
-                    :disable="!o.enabled"
+                    :disable="!canAdmin || !o.enabled"
                     @click.stop
                   />
                 </div>
@@ -121,30 +122,30 @@
           <q-separator class="q-my-sm" />
           <div class="row items-end q-col-gutter-sm">
             <div class="col-12 col-md-6">
-              <q-input v-model="customGVK" dense outlined label="+ Add kind or apiVersion/Kind" hint="Pod, subjectaccessreviews, or example.com/v1/Widget" />
+              <q-input v-model="customGVK" dense outlined label="+ Add kind or apiVersion/Kind" hint="Pod, subjectaccessreviews, or example.com/v1/Widget" :disable="!canAdmin" />
             </div>
             <div class="col-6 col-md-3">
-              <q-input v-model.number="customReplicas" type="number" min="1" dense outlined label="replicas / NS" />
+              <q-input v-model.number="customReplicas" type="number" min="1" dense outlined label="replicas / NS" :disable="!canAdmin" />
             </div>
             <div class="col-6 col-md-3">
-              <q-btn outline color="primary" class="full-width" label="Add" @click="addCustom" />
+              <q-btn outline color="primary" class="full-width" label="Add" :disable="!canAdmin" @click="addCustom" />
             </div>
           </div>
           <div v-if="selectedObj" class="selected-kind q-mt-md">
             <div class="dasm-stat-label q-mb-xs">Selected · {{ selectedObj.kind || selectedObj.id }}</div>
             <div class="row q-col-gutter-sm items-end">
               <div class="col-12 col-sm-4">
-                <q-input v-model="selectedObj.apiVersion" dense outlined label="apiVersion" />
+                <q-input v-model="selectedObj.apiVersion" dense outlined label="apiVersion" :disable="!canAdmin" />
               </div>
               <div class="col-12 col-sm-4">
-                <q-input v-model="selectedObj.kind" dense outlined label="kind" />
+                <q-input v-model="selectedObj.kind" dense outlined label="kind" :disable="!canAdmin" />
               </div>
               <div class="col-12 col-sm-4">
-                <q-toggle v-model="selectedObj.required" label="Required (fail if CRD missing)" dense />
-                <q-btn v-if="selectedObj.custom" flat dense color="negative" label="Remove custom" @click="removeSelected" />
+                <q-toggle v-model="selectedObj.required" label="Required (fail if CRD missing)" dense :disable="!canAdmin" />
+                <q-btn v-if="selectedObj.custom" flat dense color="negative" label="Remove custom" :disable="!canAdmin" @click="removeSelected" />
               </div>
               <div class="col-12" v-if="selectedObj.custom">
-                <q-input v-model="selectedObj.inlineYAML" type="textarea" autogrow dense outlined label="inline YAML (optional)" />
+                <q-input v-model="selectedObj.inlineYAML" type="textarea" autogrow dense outlined label="inline YAML (optional)" :disable="!canAdmin" />
               </div>
             </div>
           </div>
@@ -183,9 +184,9 @@
       <div class="col-12 col-md-3">
         <div class="dasm-panel">
           <div class="dasm-stat-label q-mb-sm">Density mix</div>
-          <q-input v-model.number="model.routesPerNamespace" type="number" min="1" label="Routes per NS" dense outlined class="q-mb-sm" />
-          <q-input v-model.number="model.servicesPerNamespace" type="number" min="1" label="Services per NS" dense outlined class="q-mb-sm" />
-          <q-input v-model.number="model.replicasPerService" type="number" min="1" label="Pods per service" dense outlined class="q-mb-sm" />
+          <q-input v-model.number="model.routesPerNamespace" type="number" min="1" label="Routes per NS" dense outlined class="q-mb-sm" :disable="!canAdmin" />
+          <q-input v-model.number="model.servicesPerNamespace" type="number" min="1" label="Services per NS" dense outlined class="q-mb-sm" :disable="!canAdmin" />
+          <q-input v-model.number="model.replicasPerService" type="number" min="1" label="Pods per service" dense outlined class="q-mb-sm" :disable="!canAdmin" />
           <q-select
             v-model="model.routeToService"
             :options="relOptions"
@@ -194,6 +195,7 @@
             outlined
             emit-value
             map-options
+            :disable="!canAdmin"
           />
         </div>
       </div>
@@ -226,7 +228,10 @@ import {
   saveTemplate,
   selectTemplate,
 } from 'src/services/api'
+import { useAuth } from 'src/services/auth'
 
+const auth = useAuth()
+const canAdmin = computed(() => auth.isAdmin.value)
 const error = ref('')
 const saving = ref(false)
 const previewing = ref(false)
@@ -384,6 +389,7 @@ function applyTopo(t) {
 }
 
 function onKindChange(kind) {
+  if (!canAdmin.value) return
   if (kind === 'OpenShiftObjectPressure') {
     model.name = model.name === 'smoke' ? 'object-pressure' : model.name
     if (!model.objects?.length) model.objects = defaultPressureObjects()
@@ -397,6 +403,7 @@ function onDrag(ev, kind) {
 }
 
 function onDropKind(kind) {
+  if (!canAdmin.value) return
   if (isPressure.value) return
   if (kind === 'ns') {
     if (model.namespaces < 1) model.namespaces = 2

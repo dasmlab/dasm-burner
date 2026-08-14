@@ -547,6 +547,30 @@ func (s *Service) Middleware(next http.Handler) http.Handler {
 	return s.AdminMiddleware(next)
 }
 
+// GuestUser is the unauthenticated viewer (no Keycloak session).
+func GuestUser() *User {
+	return &User{PreferredUsername: "guest", Name: "Guest", Roles: []string{"guest"}, IsAdmin: false}
+}
+
+// GuestMiddleware allows unauthenticated viewers. A Keycloak session is attached when
+// present (including users without the admin role). Local/dev (OIDC off) is full admin.
+func (s *Service) GuestMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.Enabled() {
+			local := &User{PreferredUsername: "local", Name: "Local Dev", IsAdmin: true}
+			ctx := context.WithValue(r.Context(), userContextKey, local)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		user, err := s.Authenticate(w, r)
+		if err != nil {
+			user = GuestUser()
+		}
+		ctx := context.WithValue(r.Context(), userContextKey, user)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // AdminMiddleware requires a Keycloak session with the dasm-burner client role "admin".
 // When OIDC is disabled it allows all requests (local/dev mode).
 func (s *Service) AdminMiddleware(next http.Handler) http.Handler {

@@ -57,42 +57,72 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 		s.Mux.HandleFunc("/api/v1/auth/me", s.auth.Me)
 		s.Mux.HandleFunc("/api/v1/auth/keepalive", s.auth.KeepAlive)
 	}
-	s.Mux.Handle("/api/v1/plan", s.protect(s.plan))
-	s.Mux.Handle("/api/v1/status", s.protect(s.status))
-	s.Mux.Handle("/api/v1/health", s.protect(s.health))
-	s.Mux.Handle("/api/v1/health/baseline", s.protect(s.healthBaselineAPI))
-	s.Mux.Handle("/api/v1/overview", s.protect(s.overview))
-	s.Mux.Handle("/api/v1/report", s.protect(s.report))
-	s.Mux.Handle("/api/v1/reports", s.protect(s.reports))
-	s.Mux.Handle("/api/v1/reports/", s.protect(s.reportByID))
-	s.Mux.Handle("/api/v1/topology", s.protect(s.topology))
-	s.Mux.Handle("/api/v1/templates", s.protect(s.templates))
-	s.Mux.Handle("/api/v1/templates/", s.protect(s.templateByName))
-	s.Mux.Handle("/api/v1/cluster", s.protect(s.cluster))
-	s.Mux.Handle("/api/v1/cluster/login", s.protect(s.addClusterLogin))
-	s.Mux.Handle("/api/v1/cluster/capacity", s.protect(s.clusterCapacityAPI))
-	s.Mux.Handle("/api/v1/cluster/maxpods", s.protect(s.clusterMaxPodsAPI))
-	s.Mux.Handle("/api/v1/runs", s.protect(s.runs))
-	s.Mux.Handle("/api/v1/runs/", s.protect(s.runAction))
-	s.Mux.Handle("/api/v1/cleanup", s.protect(s.cleanupAPI))
-	s.Mux.Handle("/api/v1/cleanup/check", s.protect(s.cleanupCheck))
-	s.Mux.Handle("/api/v1/cleanup-reports", s.protect(s.cleanupReportsAPI))
-	s.Mux.Handle("/api/v1/cleanup-reports/", s.protect(s.cleanupReportByID))
-	s.Mux.Handle("/api/v1/kube-burner-preview", s.protect(s.kubeBurnerPreview))
-	s.Mux.Handle("/api/v1/ovndiag", s.protect(s.ovndiagAPI))
-	s.Mux.Handle("/api/v1/ovndiag/baseline", s.protect(s.ovndiagBaselineAPI))
-	s.Mux.Handle("/api/v1/ovndiag/sample", s.protect(s.ovndiagSample))
-	s.Mux.Handle("/api/v1/ovndiag/history", s.protect(s.ovndiagHistoryAPI))
-	s.Mux.Handle("/api/v1/ovndiag/history/", s.protect(s.ovndiagHistoryAPI))
+	s.Mux.Handle("/api/v1/plan", s.admin(s.plan))
+	s.Mux.Handle("/api/v1/status", s.guest(s.status))
+	s.Mux.Handle("/api/v1/health", s.guest(s.health))
+	s.Mux.Handle("/api/v1/health/baseline", s.allowGuest(s.healthBaselineAPI, http.MethodGet))
+	s.Mux.Handle("/api/v1/overview", s.guest(s.overview))
+	s.Mux.Handle("/api/v1/report", s.guest(s.report))
+	s.Mux.Handle("/api/v1/reports", s.guest(s.reports))
+	s.Mux.Handle("/api/v1/reports/", s.guest(s.reportByID))
+	s.Mux.Handle("/api/v1/topology", s.allowGuest(s.topology, http.MethodGet))
+	s.Mux.Handle("/api/v1/templates", s.allowGuest(s.templates, http.MethodGet))
+	s.Mux.Handle("/api/v1/templates/", s.allowGuest(s.templateByName, http.MethodGet, http.MethodPut))
+	s.Mux.Handle("/api/v1/cluster", s.allowGuest(s.cluster, http.MethodGet, http.MethodPut))
+	s.Mux.Handle("/api/v1/cluster/login", s.admin(s.addClusterLogin))
+	s.Mux.Handle("/api/v1/cluster/capacity", s.admin(s.clusterCapacityAPI))
+	s.Mux.Handle("/api/v1/cluster/maxpods", s.admin(s.clusterMaxPodsAPI))
+	s.Mux.Handle("/api/v1/runs", s.allowGuest(s.runs, http.MethodGet))
+	s.Mux.Handle("/api/v1/runs/", s.allowGuest(s.runAction, http.MethodGet))
+	s.Mux.Handle("/api/v1/cleanup", s.allowGuest(s.cleanupAPI, http.MethodGet))
+	s.Mux.Handle("/api/v1/cleanup/check", s.guest(s.cleanupCheck))
+	s.Mux.Handle("/api/v1/cleanup-reports", s.guest(s.cleanupReportsAPI))
+	s.Mux.Handle("/api/v1/cleanup-reports/", s.guest(s.cleanupReportByID))
+	s.Mux.Handle("/api/v1/kube-burner-preview", s.guest(s.kubeBurnerPreview))
+	s.Mux.Handle("/api/v1/ovndiag", s.allowGuest(s.ovndiagAPI, http.MethodGet))
+	s.Mux.Handle("/api/v1/ovndiag/baseline", s.admin(s.ovndiagBaselineAPI))
+	s.Mux.Handle("/api/v1/ovndiag/sample", s.admin(s.ovndiagSample))
+	s.Mux.Handle("/api/v1/ovndiag/history", s.guest(s.ovndiagHistoryAPI))
+	s.Mux.Handle("/api/v1/ovndiag/history/", s.guest(s.ovndiagHistoryAPI))
 	s.Mux.HandleFunc("/", s.spa)
 	return s
 }
 
-func (s *Server) protect(h http.HandlerFunc) http.Handler {
+func (s *Server) guest(h http.HandlerFunc) http.Handler {
+	if s.auth == nil {
+		return h
+	}
+	return s.auth.GuestMiddleware(h)
+}
+
+func (s *Server) admin(h http.HandlerFunc) http.Handler {
 	if s.auth == nil {
 		return h
 	}
 	return s.auth.AdminMiddleware(h)
+}
+
+// allowGuest lets the listed methods through as a viewer; everything else requires admin.
+func (s *Server) allowGuest(h http.HandlerFunc, methods ...string) http.Handler {
+	ok := map[string]bool{}
+	for _, m := range methods {
+		ok[m] = true
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ok[r.Method] {
+			s.guest(h).ServeHTTP(w, r)
+			return
+		}
+		s.admin(h).ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requesterIsAdmin(r *http.Request) bool {
+	if s.auth == nil || !s.auth.Enabled() {
+		return true
+	}
+	u, ok := auth.UserFromContext(r.Context())
+	return ok && u.IsAdmin
 }
 
 func (s *Server) authConfig(w http.ResponseWriter, _ *http.Request) {

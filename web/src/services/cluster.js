@@ -34,7 +34,6 @@ export function useCluster() {
     if (!c) return
     await apiSelectCluster({
       name: c.name,
-      kubeconfig: c.kubeconfig,
       context: c.context,
       source: c.source,
     })

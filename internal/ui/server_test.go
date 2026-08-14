@@ -86,3 +86,32 @@ func TestDryRunExecute(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestDeleteLoginCommandCluster(t *testing.T) {
+	s := New("dev", t.TempDir(), "", "", nil, nil)
+	if _, _, err := s.writeTokenKubeconfig(&parsedLogin{
+		Name: "lab-target", Server: "https://api.example:6443", Token: "tok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range s.listClusters() {
+		if c.Name == "lab-target" && c.Source == "login-command" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected login-command cluster in list")
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/cluster", strings.NewReader(`{"name":"lab-target"}`))
+	rec := httptest.NewRecorder()
+	s.Mux.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("delete %d %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range s.listClusters() {
+		if c.Name == "lab-target" {
+			t.Fatal("cluster still listed after delete")
+		}
+	}
+}

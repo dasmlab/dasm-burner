@@ -92,7 +92,7 @@
             icon="play_arrow"
             label="Execute test"
             :loading="starting"
-            :disable="!templateName || running"
+            :disable="!templateName || running || !canAdmin"
             @click="start"
           />
           <q-btn
@@ -101,7 +101,7 @@
             class="full-width q-mt-sm"
             icon="stop"
             label="Cancel"
-            :disable="!running"
+            :disable="!running || !canAdmin"
             @click="cancel"
           />
         </div>
@@ -156,7 +156,7 @@
               icon="delete_sweep"
               label="Clean last run"
               :loading="cleaning"
-              :disable="running || !templateName"
+              :disable="running || !templateName || !canAdmin"
               @click="doCleanup('last')"
             />
             <q-btn
@@ -167,7 +167,7 @@
               icon="folder_delete"
               label="Clean this template"
               :loading="cleaning"
-              :disable="running || !templateName"
+              :disable="running || !templateName || !canAdmin"
               @click="doCleanup('template')"
             />
             <q-btn
@@ -178,7 +178,7 @@
               icon="cleaning_services"
               label="Clean all kb- runs"
               :loading="cleaning"
-              :disable="running"
+              :disable="running || !canAdmin"
               @click="doCleanup('all')"
             />
           </div>
@@ -225,7 +225,7 @@
               min="110"
               max="2000"
               class="q-mb-sm"
-              :disable="running || cleaning || settingMaxPods"
+              :disable="running || cleaning || settingMaxPods || !canAdmin"
             />
             <q-btn
               outline
@@ -235,7 +235,7 @@
               icon="refresh"
               label="Get current"
               :loading="readingMaxPods"
-              :disable="running || cleaning || settingMaxPods"
+              :disable="running || cleaning || settingMaxPods || !canAdmin"
               @click="refreshMaxPods(true)"
             />
             <q-btn
@@ -246,8 +246,7 @@
               icon="memory"
               label="Set worker maxPods"
               :loading="settingMaxPods"
-              :disable="running || cleaning"
-              @click="openMaxPodsDialog"
+              :disable="running || cleaning || !canAdmin"
             />
           </div>
         </q-expansion-item>
@@ -262,11 +261,11 @@
           label="Safety"
         >
           <div class="tool-body">
-            <q-toggle v-model="dryRun" dense label="Dry run (no create)" :disable="running" />
-            <q-toggle v-model="confirm" dense label="I understand this loads the control plane" :disable="running || dryRun" />
-            <q-toggle v-model="allowLarge" dense label="Allow >10 namespaces" :disable="running || dryRun" />
-            <q-toggle v-model="skipBaseline" dense label="Skip baseline wait" :disable="running" />
-            <q-toggle v-model="enableOVNDiag" dense label="OVN Diagnoser samples" :disable="running || dryRun" />
+            <q-toggle v-model="dryRun" dense label="Dry run (no create)" :disable="running || !canAdmin" />
+            <q-toggle v-model="confirm" dense label="I understand this loads the control plane" :disable="running || dryRun || !canAdmin" />
+            <q-toggle v-model="allowLarge" dense label="Allow >10 namespaces" :disable="running || dryRun || !canAdmin" />
+            <q-toggle v-model="skipBaseline" dense label="Skip baseline wait" :disable="running || !canAdmin" />
+            <q-toggle v-model="enableOVNDiag" dense label="OVN Diagnoser samples" :disable="running || dryRun || !canAdmin" />
             <div class="dasm-stat-label q-mt-sm q-mb-xs">Do not tolerate</div>
             <q-select
               v-model="avoidTaints"
@@ -279,8 +278,7 @@
               new-value-mode="add-unique"
               hide-dropdown-icon
               input-debounce="0"
-              :disable="running"
-              @new-value="addAvoidTaint"
+              :disable="running || !canAdmin"
             />
           </div>
         </q-expansion-item>
@@ -316,7 +314,7 @@
             size="sm"
             icon="restart_alt"
             label="Clear / reset"
-            :disable="running"
+            :disable="running || !canAdmin"
             @click="clearLog"
           />
         </div>
@@ -385,8 +383,11 @@ import {
   startRun,
 } from 'src/services/api'
 import api from 'src/services/api'
+import { useAuth } from 'src/services/auth'
 import { useCluster } from 'src/services/cluster'
 
+const auth = useAuth()
+const canAdmin = computed(() => auth.isAdmin.value)
 const cluster = useCluster()
 const error = ref('')
 const cleanupMsg = ref('')
@@ -743,6 +744,7 @@ function addAvoidTaint(val, done) {
 }
 
 async function start() {
+  if (!canAdmin.value) return
   error.value = ''
   cleanupMsg.value = ''
   starting.value = true
@@ -828,6 +830,7 @@ async function onTemplate(name) {
 }
 
 async function doCleanup(scope) {
+  if (!canAdmin.value) return
   error.value = ''
   cleanupMsg.value = ''
   const labels = {
@@ -901,7 +904,7 @@ watch(
   async (name, prev) => {
     if (!name || name === prev) return
     await checkState(`cluster switched to ${name}`)
-    await refreshCapacity()
+    if (canAdmin.value) await refreshCapacity()
   },
 )
 
@@ -911,7 +914,7 @@ onMounted(async () => {
     if (!cluster.ready.value) await cluster.refresh()
     await poll()
     await checkState('page load')
-    await refreshCapacity()
+    if (canAdmin.value) await refreshCapacity()
   } catch (e) {
     error.value = e.response?.data?.error || e.message
   }

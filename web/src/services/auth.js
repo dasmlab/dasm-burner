@@ -7,13 +7,16 @@ const ready = ref(false)
 const loading = ref(false)
 
 export function useAuth() {
-  const isAuthenticated = computed(() => !!user.value)
+  const isAuthenticated = computed(() => !!user.value && user.value.preferred_username !== 'guest')
   const isAdmin = computed(() => {
     if (!authEnabled.value) return true
     return !!user.value?.is_admin
   })
   const displayName = computed(() => {
-    if (!user.value) return ''
+    if (!authEnabled.value) {
+      return user.value?.name || 'Local Dev'
+    }
+    if (!user.value) return 'Guest'
     return user.value.name || user.value.preferred_username || user.value.email || 'User'
   })
 

@@ -40,21 +40,22 @@ Admin console: https://keycloak.apps.2026-prod-1.ocp.dasmlab.org/admin
 5. Client role: **`admin`** — assign to Keycloak user **`dasm`** (Users → dasm → Role mapping → Filter by clients → `dasm-burner` → `admin`)
 6. Default client scopes must include **`roles`** so `resource_access["dasm-burner"].roles` lands in the access token. Match is case-insensitive (`Admin` or `admin`).
 
-Without the client role, login succeeds but APIs return 403 and the UI sends you back to login.
+Without the client role, login succeeds but the UI stays **view-only** (same as Guest). Mutations return 403.
 
 ---
 
 ## How login works
 
-1. User hits the app → redirected to `/login`
-2. **Sign in with Keycloak** → `GET /api/v1/auth/login`
+1. User hits the app → **home as Guest** (no login wall)
+2. **Sign in** in the header → `GET /api/v1/auth/login` → Keycloak
 3. Keycloak redirects to `/api/v1/auth/callback`
 4. Backend exchanges the code with the client secret, verifies `id_token`, sets `db_session` httpOnly cookie
-5. SPA calls send the cookie; `AdminMiddleware` requires client role `admin`
-6. Logout clears the cookie and hits Keycloak end-session
-7. `/healthz`, `/readyz`, `/api/v1/version`, `/api/v1/auth/config` stay public
+5. Guests may **view** cluster state, templates, Execute pipeline/log, reports, cleanup reports, and OVN history
+6. Mutations (execute, cleanup, save templates, add/remove clusters, capture/sample OVN, maxPods) require client role **`admin`**
+7. Logout clears the cookie and hits Keycloak end-session
+8. `/healthz`, `/readyz`, `/api/v1/version`, `/api/v1/auth/config` stay public
 
-When OIDC env is unset, serve runs **open local/dev** (no login).
+When OIDC env is unset, serve runs **open local/dev** (full admin, no login).
 
 ---
 

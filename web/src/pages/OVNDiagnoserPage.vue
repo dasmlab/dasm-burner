@@ -12,8 +12,8 @@
     </div>
 
     <div class="row items-center q-gutter-sm q-mb-sm">
-      <q-btn outline color="primary" label="Capture baseline" :loading="busy" @click="captureBaseline" />
-      <q-btn unelevated color="primary" icon="refresh" label="Sample now" :loading="busy" @click="sample" />
+      <q-btn outline color="primary" label="Capture baseline" :loading="busy" :disable="!canAdmin" @click="captureBaseline" />
+      <q-btn unelevated color="primary" icon="refresh" label="Sample now" :loading="busy" :disable="!canAdmin" @click="sample" />
       <q-btn flat color="primary" icon="history" label="Reload latest" :loading="busy" @click="loadLatest" />
       <q-badge v-if="snap?.overallState" :color="stateColor" text-color="white">{{ snap.overallState }}</q-badge>
       <span v-if="snap?.baselineAt" class="text-caption text-grey-7">baseline {{ fmt(snap.baselineAt) }}</span>
@@ -196,8 +196,11 @@ import {
   sampleOVNDiag,
 } from 'src/services/api'
 import { splitWhy } from 'src/utils/metrics'
+import { useAuth } from 'src/services/auth'
 import { useCluster } from 'src/services/cluster'
 
+const auth = useAuth()
+const canAdmin = computed(() => auth.isAdmin.value)
 const cluster = useCluster()
 const busy = ref(false)
 const error = ref('')

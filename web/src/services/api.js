@@ -44,6 +44,7 @@ export const deleteTemplate = (name) => api.delete(`/templates/${encodeURICompon
 export const getCluster = () => api.get('/cluster').then((r) => r.data)
 export const selectCluster = (body) => api.put('/cluster', body).then((r) => r.data)
 export const addClusterLogin = (body) => api.post('/cluster/login', body).then((r) => r.data)
+export const deleteCluster = (name) => api.delete('/cluster', { data: { name } }).then((r) => r.data)
 export const getClusterCapacity = () => api.get('/cluster/capacity').then((r) => r.data)
 export const postWorkerMaxPods = (body) =>
   api.post('/cluster/maxpods', body, { timeout: 60_000 }).then((r) => r.data)
@@ -59,7 +60,7 @@ export const getCleanupStatus = (template) =>
 export const postCleanup = (body) => api.post('/cleanup', body, { timeout: 60_000 }).then((r) => r.data)
 export const checkCleanupState = (body) =>
   api.post('/cleanup/check', body || {}).then((r) => r.data)
-export const listCleanupReports = () => api.get('/cleanup-reports').then((r) => r.data)
+export const listCleanupReports = () => api.get('/cleanup-reports', { timeout: 60_000 }).then((r) => r.data)
 export const getCleanupReport = (id) =>
   api.get(`/cleanup-reports/${encodeURIComponent(id || 'latest')}`).then((r) => r.data)
 export const getOVNDiag = () =>

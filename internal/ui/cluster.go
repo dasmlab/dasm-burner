@@ -70,13 +70,21 @@ func (s *Server) activeKubeconfig() string {
 func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		list := s.listClusters()
+		cur := s.currentCluster()
+		if !s.requesterIsAdmin(r) {
+			list = redactClusterSecrets(list)
+			cur = redactClusterInfo(cur)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"current":  s.currentCluster(),
-			"clusters": s.listClusters(),
+			"current":  cur,
+			"clusters": list,
 			"warning":  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 		})
 	case http.MethodPut:
 		s.selectCluster(w, r)
+	case http.MethodDelete:
+		s.deleteCluster(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -138,6 +146,82 @@ func (s *Server) selectCluster(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"current": s.currentCluster(),
 		"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+	})
+}
+
+func redactClusterInfo(c clusterInfo) clusterInfo {
+	c.Kubeconfig = ""
+	c.User = ""
+	return c
+}
+
+func redactClusterSecrets(list []clusterInfo) []clusterInfo {
+	out := make([]clusterInfo, len(list))
+	for i, c := range list {
+		out[i] = redactClusterInfo(c)
+	}
+	return out
+}
+
+func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("name is required"))
+		return
+	}
+	list := s.listClusters()
+	var pick *clusterInfo
+	for i := range list {
+		if list[i].Name == name {
+			pick = &list[i]
+			break
+		}
+	}
+	if pick == nil {
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown cluster"))
+		return
+	}
+	if pick.Source != "login-command" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("only token-added clusters can be removed (not in-cluster or file kubeconfig contexts)"))
+		return
+	}
+	dir, err := filepath.Abs(s.clustersDir())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	abs, err := filepath.Abs(pick.Kubeconfig)
+	if err != nil || abs == "" || !strings.HasPrefix(abs, dir+string(os.PathSeparator)) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("refusing to delete kubeconfig outside clusters dir"))
+		return
+	}
+	if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if pick.Current {
+		cs := s.clusterState()
+		cs.mu.Lock()
+		cs.kubeconfig = ""
+		cs.context = ""
+		cs.source = "in-cluster"
+		cs.name = envOr("CLUSTER_DISPLAY_NAME", envOr("CLUSTER_NAME", "in-cluster"))
+		name := cs.name
+		cs.mu.Unlock()
+		_ = s.persistSelectedCluster(clusterTarget{Name: name, Source: "in-cluster"})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted":  name,
+		"current":  s.currentCluster(),
+		"clusters": s.listClusters(),
+		"warning":  "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
 

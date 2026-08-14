@@ -22,7 +22,7 @@
           icon="restart_alt"
           label="Clear restart watermark"
           :loading="clearing"
-          :disable="loading"
+          :disable="loading || !canAdmin"
           @click="clearRestarts"
         />
         <q-btn flat dense color="primary" icon="refresh" label="Refresh" :loading="loading" @click="load" />
@@ -111,8 +111,8 @@
     <div class="row items-center justify-between q-mb-sm q-mt-lg">
       <div class="text-subtitle1 text-weight-medium">OVN-Kube Diagnoser</div>
       <div class="row q-gutter-sm">
-        <q-btn outline dense color="primary" label="Capture baseline" :loading="ovnBusy" @click="captureOVNBaseline" />
-        <q-btn flat dense color="primary" icon="refresh" label="Sample" :loading="ovnBusy" @click="sampleOVN" />
+        <q-btn outline dense color="primary" label="Capture baseline" :loading="ovnBusy" :disable="!canAdmin" @click="captureOVNBaseline" />
+        <q-btn flat dense color="primary" icon="refresh" label="Sample" :loading="ovnBusy" :disable="!canAdmin" @click="sampleOVN" />
       </div>
     </div>
     <p class="text-caption text-grey-7 q-mb-md">
@@ -278,8 +278,11 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { clearHealthBaseline, getOverview, getOVNDiag, sampleOVNDiag, baselineOVNDiag } from 'src/services/api'
+import { useAuth } from 'src/services/auth'
 import { useCluster } from 'src/services/cluster'
 
+const auth = useAuth()
+const canAdmin = computed(() => auth.isAdmin.value)
 const cluster = useCluster()
 const loading = ref(false)
 const clearing = ref(false)

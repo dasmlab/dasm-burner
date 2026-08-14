@@ -27,37 +27,37 @@ type CleanupObjectTotals struct {
 
 // CleanupReport is an immutable record of one cleanup job.
 type CleanupReport struct {
-	ID                  string               `json:"id"`
-	Scope               string               `json:"scope"` // last | template | all
-	Template            string               `json:"template,omitempty"`
-	Cluster             string               `json:"cluster,omitempty"`
-	DryRun              bool                 `json:"dryRun"`
-	Waited              bool                 `json:"waited"`
-	Status              string               `json:"status"` // passed | failed | partial
-	RunIDs              []string             `json:"runIds,omitempty"`
-	Started             time.Time            `json:"started"`
-	Finished            time.Time            `json:"finished"`
-	DurationMs          int64                `json:"durationMs"`
-	Duration            string               `json:"duration"` // human, e.g. 12m34s
-	Targeted            CleanupObjectTotals  `json:"targeted"`
-	DeletedNS           int                  `json:"deletedNamespaces"`
-	Remaining           int                  `json:"remainingNamespaces"`
-	Namespaces          []string             `json:"namespaces,omitempty"`
-	Error               string               `json:"error,omitempty"`
-	Logs                []CleanupLogLine     `json:"logs,omitempty"`
-	ClusterObservation  *ClusterObservation  `json:"clusterObservation,omitempty"`
-	Warning             string               `json:"warning"`
+	ID                 string              `json:"id"`
+	Scope              string              `json:"scope"` // last | template | all
+	Template           string              `json:"template,omitempty"`
+	Cluster            string              `json:"cluster,omitempty"`
+	DryRun             bool                `json:"dryRun"`
+	Waited             bool                `json:"waited"`
+	Status             string              `json:"status"` // passed | failed | partial
+	RunIDs             []string            `json:"runIds,omitempty"`
+	Started            time.Time           `json:"started"`
+	Finished           time.Time           `json:"finished"`
+	DurationMs         int64               `json:"durationMs"`
+	Duration           string              `json:"duration"` // human, e.g. 12m34s
+	Targeted           CleanupObjectTotals `json:"targeted"`
+	DeletedNS          int                 `json:"deletedNamespaces"`
+	Remaining          int                 `json:"remainingNamespaces"`
+	Namespaces         []string            `json:"namespaces,omitempty"`
+	Error              string              `json:"error,omitempty"`
+	Logs               []CleanupLogLine    `json:"logs,omitempty"`
+	ClusterObservation *ClusterObservation `json:"clusterObservation,omitempty"`
+	Warning            string              `json:"warning"`
 }
 
 // ClusterObservation captures node/monitoring health during cleanup.
 type ClusterObservation struct {
-	Samples             []ClusterSample   `json:"samples,omitempty"`
-	Incidents           []ClusterIncident `json:"incidents,omitempty"`
-	Summary             string            `json:"summary,omitempty"`
-	MaxNotReady         int               `json:"maxNotReady"`
-	MaxNotReadyDurSec   int64             `json:"maxNotReadyDurationSec,omitempty"`
-	MonitoringOOM       int               `json:"monitoringOOMTotal"`
-	WorstNodes          []string          `json:"worstNodes,omitempty"`
+	Samples           []ClusterSample   `json:"samples,omitempty"`
+	Incidents         []ClusterIncident `json:"incidents,omitempty"`
+	Summary           string            `json:"summary,omitempty"`
+	MaxNotReady       int               `json:"maxNotReady"`
+	MaxNotReadyDurSec int64             `json:"maxNotReadyDurationSec,omitempty"`
+	MonitoringOOM     int               `json:"monitoringOOMTotal"`
+	WorstNodes        []string          `json:"worstNodes,omitempty"`
 }
 
 // ClusterSample is one cleanup-watch poll.
@@ -147,8 +147,32 @@ func WriteCleanupReport(runDir string, doc *CleanupReport) (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, "report.json"), b, 0o644); err != nil {
 		return "", err
 	}
+	_ = os.WriteFile(filepath.Join(dir, "summary.json"), mustJSON(itemFromCleanup(doc)), 0o644)
 	_ = os.WriteFile(filepath.Join(cleanupReportsDir(runDir), "latest.json"), b, 0o644)
 	return doc.ID, nil
+}
+
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+func itemFromCleanup(doc *CleanupReport) CleanupListItem {
+	return CleanupListItem{
+		ID:         doc.ID,
+		Scope:      doc.Scope,
+		Template:   doc.Template,
+		Cluster:    doc.Cluster,
+		Status:     doc.Status,
+		DryRun:     doc.DryRun,
+		Started:    doc.Started,
+		Finished:   doc.Finished,
+		Duration:   doc.Duration,
+		DurationMs: doc.DurationMs,
+		DeletedNS:  doc.DeletedNS,
+		Remaining:  doc.Remaining,
+		Targeted:   doc.Targeted,
+	}
 }
 
 // LoadCleanupReport loads one cleanup report by id.
@@ -192,28 +216,31 @@ func ListCleanupReports(runDir string) ([]CleanupListItem, error) {
 		if !e.IsDir() {
 			continue
 		}
-		doc, err := LoadCleanupReport(runDir, e.Name())
+		item, err := loadCleanupListItem(runDir, e.Name())
 		if err != nil {
 			continue
 		}
-		out = append(out, CleanupListItem{
-			ID:         doc.ID,
-			Scope:      doc.Scope,
-			Template:   doc.Template,
-			Cluster:    doc.Cluster,
-			Status:     doc.Status,
-			DryRun:     doc.DryRun,
-			Started:    doc.Started,
-			Finished:   doc.Finished,
-			Duration:   doc.Duration,
-			DurationMs: doc.DurationMs,
-			DeletedNS:  doc.DeletedNS,
-			Remaining:  doc.Remaining,
-			Targeted:   doc.Targeted,
-		})
+		out = append(out, item)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Finished.After(out[j].Finished)
 	})
 	return out, nil
+}
+
+func loadCleanupListItem(runDir, id string) (CleanupListItem, error) {
+	sumPath := filepath.Join(cleanupReportsDir(runDir), id, "summary.json")
+	if b, err := os.ReadFile(sumPath); err == nil {
+		var item CleanupListItem
+		if json.Unmarshal(b, &item) == nil && item.ID != "" {
+			return item, nil
+		}
+	}
+	doc, err := LoadCleanupReport(runDir, id)
+	if err != nil {
+		return CleanupListItem{}, err
+	}
+	item := itemFromCleanup(doc)
+	_ = os.WriteFile(sumPath, mustJSON(item), 0o644)
+	return item, nil
 }
