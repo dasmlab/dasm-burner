@@ -119,3 +119,46 @@ func TestPhase1RejectsLaterControllers(t *testing.T) {
 		t.Fatal("expected StatefulSet to be rejected in Phase 1")
 	}
 }
+
+func TestEnsureDistinctTemplateSeed(t *testing.T) {
+	smoke := StartingTemplate()
+	if EnsureDistinctTemplateSeed(smoke) {
+		t.Fatal("stock smoke should keep its seed")
+	}
+	if smoke.Naming.Seed.Value != 1837291 {
+		t.Fatalf("smoke seed = %d", smoke.Naming.Seed.Value)
+	}
+
+	op := StartingObjectPressure()
+	if EnsureDistinctTemplateSeed(op) {
+		t.Fatal("stock object-pressure should keep its seed")
+	}
+
+	clone := StartingTemplate()
+	clone.Metadata.Name = "smoke2500-1replica"
+	if !EnsureDistinctTemplateSeed(clone) {
+		t.Fatal("Save-As clone still sharing smoke seed should reseed")
+	}
+	if clone.Naming.Seed.Value == smoke.Naming.Seed.Value {
+		t.Fatal("clone still has smoke seed 1837291")
+	}
+	if runIDHex(clone.Naming.Seed.Value) == runIDHex(smoke.Naming.Seed.Value) {
+		t.Fatalf("clone run id still %s", runIDHex(clone.Naming.Seed.Value))
+	}
+
+	other := StartingTemplate()
+	other.Metadata.Name = "smoke2500-3replica"
+	if !EnsureDistinctTemplateSeed(other) {
+		t.Fatal("second clone should reseed")
+	}
+	if clone.Naming.Seed.Value == other.Naming.Seed.Value {
+		t.Fatal("two named copies share the same seed")
+	}
+	if runIDHex(clone.Naming.Seed.Value) == runIDHex(other.Naming.Seed.Value) {
+		t.Fatal("two named copies share the same kb- prefix")
+	}
+
+	if EnsureDistinctTemplateSeed(clone) {
+		t.Fatal("second pass should be a no-op")
+	}
+}

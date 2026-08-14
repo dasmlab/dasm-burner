@@ -45,6 +45,8 @@
             @update:model-value="onTemplate"
           />
           <div v-if="selectedMeta" class="text-caption text-grey-7 q-mt-sm">
+            <span v-if="selectedMeta.prefix" class="text-mono text-weight-medium">{{ selectedMeta.prefix }}</span>
+            <span v-if="selectedMeta.prefix"> · </span>
             <template v-if="selectedMeta.kind === 'OpenShiftObjectPressure'">
               ObjectPressure · {{ selectedMeta.namespaces }} NS ·
               {{ (selectedMeta.objects || []).filter((o) => o.enabled).length }} kinds ·
@@ -145,17 +147,23 @@
       </div>
     </div>
 
-    <div v-if="runPrefix" class="dasm-panel q-mb-md run-meta">
+    <div v-if="templatePrefix || runPrefix" class="dasm-panel q-mb-md run-meta">
       <div class="row items-center q-col-gutter-md">
         <div class="col-12 col-md-auto">
-          <div class="dasm-stat-label">Generated prefix</div>
-          <div class="text-mono text-weight-bold">{{ runPrefix }}</div>
+          <div class="dasm-stat-label">This template prefix</div>
+          <div class="text-mono text-weight-bold">{{ templatePrefix || '—' }}</div>
+        </div>
+        <div v-if="runPrefix && runPrefix !== templatePrefix" class="col-12 col-md-auto">
+          <div class="dasm-stat-label">Last / interrupted run</div>
+          <div class="text-mono text-weight-medium">{{ runPrefix }}</div>
         </div>
         <div class="col-12 col-md">
           <div class="dasm-stat-label">Name pattern</div>
-          <div class="text-mono text-caption">{{ runPattern || `${runPrefix}-{kind}-{seq}-{sfx}` }}</div>
+          <div class="text-mono text-caption">{{ displayPattern || `${runPrefix}-{kind}-{seq:05d}-{sfx}` }}</div>
           <div class="text-caption text-grey-7 q-mt-xs">
-            Ties burner (<code>kb</code>) → run (<code>{{ run?.runId }}</code>) → object kind → batch seq → unique suffix.
+            Namespaces look like <code>{{ templatePrefix || 'kb-xxxx' }}-ns-00001-…</code>
+            — burner (<code>kb</code>) → template run id → kind → batch seq → suffix.
+            Also labeled <code>dasm-burner.dasmlab.org/config={{ templateName || '…' }}</code>.
           </div>
         </div>
         <div v-if="showReportLink" class="col-12 col-md-auto">
@@ -427,14 +435,15 @@ let cleanupPoll = null
 
 const templateOptions = computed(() =>
   templates.value.map((t) => {
+    const pfx = t.prefix ? `${t.prefix} · ` : ''
     if (t.kind === 'OpenShiftObjectPressure') {
       return {
-        label: `${t.name} · pressure · ${t.namespaces} NS · ${t.counts?.intendedObjects ?? '?'} objs`,
+        label: `${t.name} · ${pfx}pressure · ${t.namespaces} NS · ${t.counts?.intendedObjects ?? '?'} objs`,
         value: t.name,
       }
     }
     return {
-      label: `${t.name} · ${t.namespaces} NS · ${t.counts?.pods ?? '?'} pods`,
+      label: `${t.name} · ${pfx}${t.namespaces} NS · ${t.counts?.pods ?? '?'} pods`,
       value: t.name,
     }
   }),
@@ -447,6 +456,12 @@ const running = computed(() => runStatus.value === 'running')
 const interrupted = computed(() => runStatus.value === 'interrupted')
 const runPrefix = computed(() => run.value?.prefix || '')
 const runPattern = computed(() => run.value?.namePattern || '')
+const templatePrefix = computed(() => selectedMeta.value?.prefix || '')
+const displayPattern = computed(() => {
+  if (runPattern.value && runPrefix.value === templatePrefix.value) return runPattern.value
+  const pfx = templatePrefix.value || runPrefix.value
+  return pfx ? `${pfx}-{kind}-{seq:05d}-{sfx}` : ''
+})
 const showReportLink = computed(() =>
   Boolean(run.value?.snapshotId || run.value?.reportUrl) &&
   (runStatus.value === 'passed' || runStatus.value === 'failed' || runStatus.value === 'interrupted'),

@@ -50,3 +50,16 @@ func TestDifferentSeedsDiverge(t *testing.T) {
 		t.Fatal("different seeds produced the same service name")
 	}
 }
+
+func TestPrefixForSmoke(t *testing.T) {
+	n := config.StartingTemplate().Naming
+	if got := PrefixFor(n); got != "kb-6a98" {
+		t.Fatalf("smoke prefix = %s want kb-6a98", got)
+	}
+	clone := config.StartingTemplate()
+	clone.Metadata.Name = "smoke2500-1replica"
+	config.EnsureDistinctTemplateSeed(clone)
+	if PrefixFor(clone.Naming) == "kb-6a98" {
+		t.Fatal("named copy still maps to smoke prefix kb-6a98")
+	}
+}

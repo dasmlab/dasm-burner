@@ -73,6 +73,10 @@ func runIDFromSeed(seed int64) string {
 	return fmt.Sprintf("%x", sum[:2]) // 4 hex chars
 }
 
+func PrefixFor(n config.Naming) string {
+	return "kb-" + NewFactory(n).RunID()
+}
+
 func (f *Factory) RunID() string { return f.runID }
 func (f *Factory) Seed() int64   { return f.seed }
 

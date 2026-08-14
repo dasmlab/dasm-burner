@@ -52,6 +52,10 @@
           <q-btn flat color="negative" icon="delete" :disable="!activeName" @click="remove" />
         </div>
       </div>
+      <div v-if="activePrefix" class="text-caption text-grey-7 q-mt-sm">
+        Cluster names use prefix <code class="text-mono">{{ activePrefix }}</code>
+        (Save as assigns a new prefix so copies do not share <code>kb-6a98</code> with smoke).
+      </div>
     </div>
 
     <div class="row q-col-gutter-md">
@@ -286,10 +290,11 @@ const groupedObjects = computed(() => {
 
 const templateOptions = computed(() =>
   templates.value.map((t) => ({
-    label: `${t.name} · ${t.kind === 'OpenShiftObjectPressure' ? 'pressure' : 'density'} · ${t.namespaces} NS`,
+    label: `${t.name} · ${t.prefix ? t.prefix + ' · ' : ''}${t.kind === 'OpenShiftObjectPressure' ? 'pressure' : 'density'} · ${t.namespaces} NS`,
     value: t.name,
   })),
 )
+const activePrefix = computed(() => templates.value.find((t) => t.name === activeName.value)?.prefix || '')
 
 const counts = computed(() => {
   const c = model.counts || {}

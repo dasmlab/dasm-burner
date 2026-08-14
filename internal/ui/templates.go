@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dasmlab/dasm-burner/internal/config"
+	"github.com/dasmlab/dasm-burner/internal/naming"
 )
 
 var templateNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
@@ -27,6 +28,8 @@ type templateMeta struct {
 	RouteToService       string    `json:"routeToService"`
 	Objects              any       `json:"objects,omitempty"`
 	Counts               any       `json:"counts,omitempty"`
+	Prefix               string    `json:"prefix,omitempty"`
+	RunID                string    `json:"runId,omitempty"`
 	UpdatedAt            time.Time `json:"updatedAt"`
 	Active               bool      `json:"active,omitempty"`
 }
@@ -111,15 +114,15 @@ func (s *Server) templateByName(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name                 string                 `json:"name"`
-		SaveAs               string                 `json:"saveAs"`
-		Description          string                 `json:"description"`
-		Kind                 string                 `json:"kind"`
-		Namespaces           int                    `json:"namespaces"`
-		RoutesPerNamespace   int                    `json:"routesPerNamespace"`
-		ServicesPerNamespace int                    `json:"servicesPerNamespace"`
-		ReplicasPerService   int                    `json:"replicasPerService"`
-		RouteToService       string                 `json:"routeToService"`
+		Name                 string                  `json:"name"`
+		SaveAs               string                  `json:"saveAs"`
+		Description          string                  `json:"description"`
+		Kind                 string                  `json:"kind"`
+		Namespaces           int                     `json:"namespaces"`
+		RoutesPerNamespace   int                     `json:"routesPerNamespace"`
+		ServicesPerNamespace int                     `json:"servicesPerNamespace"`
+		ReplicasPerService   int                     `json:"replicasPerService"`
+		RouteToService       string                  `json:"routeToService"`
 		Objects              []config.PressureObject `json:"objects"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -149,6 +152,11 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 		cfg.Kind = body.Kind
 	}
 	cfg.Metadata.Name = name
+	if strings.TrimSpace(body.SaveAs) != "" {
+		cfg.Naming.Seed = config.Seed{Auto: false, Value: config.SeedFromTemplateName(name)}
+	} else {
+		config.EnsureDistinctTemplateSeed(cfg)
+	}
 	if body.Description != "" {
 		cfg.Metadata.Description = body.Description
 	}
@@ -188,6 +196,8 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	s.setActiveTemplate(name)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"saved":     name,
+		"prefix":    naming.PrefixFor(cfg.Naming),
+		"runId":     naming.NewFactory(cfg.Naming).RunID(),
 		"topology":  compactFrom(cfg),
 		"templates": s.listTemplates(),
 	})
@@ -197,7 +207,25 @@ func (s *Server) loadTemplate(name string) (*config.Config, error) {
 	if !templateNameRe.MatchString(name) {
 		return nil, fmt.Errorf("invalid template name")
 	}
-	return config.Load(filepath.Join(s.templatesDir(), name+".yaml"))
+	path := filepath.Join(s.templatesDir(), name+".yaml")
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	changed := false
+	if cfg.Metadata.Name != name {
+		cfg.Metadata.Name = name
+		changed = true
+	}
+	if config.EnsureDistinctTemplateSeed(cfg) {
+		changed = true
+	}
+	if changed {
+		if raw, merr := cfg.Marshal(); merr == nil {
+			_ = os.WriteFile(path, raw, 0o644)
+		}
+	}
+	return cfg, nil
 }
 
 func (s *Server) listTemplates() []templateMeta {
@@ -217,6 +245,19 @@ func (s *Server) listTemplates() []templateMeta {
 		if err != nil {
 			continue
 		}
+		changed := false
+		if cfg.Metadata.Name != name {
+			cfg.Metadata.Name = name
+			changed = true
+		}
+		if config.EnsureDistinctTemplateSeed(cfg) {
+			changed = true
+		}
+		if changed {
+			if raw, merr := cfg.Marshal(); merr == nil {
+				_ = os.WriteFile(filepath.Join(dir, e.Name()), raw, 0o644)
+			}
+		}
 		st, _ := e.Info()
 		updated := time.Now()
 		if st != nil {
@@ -233,6 +274,8 @@ func (s *Server) listTemplates() []templateMeta {
 			RouteToService:       cfg.Topology.Relationships.RouteToService,
 			Objects:              cfg.Topology.Objects,
 			Counts:               cfg.Counts(),
+			Prefix:               naming.PrefixFor(cfg.Naming),
+			RunID:                naming.NewFactory(cfg.Naming).RunID(),
 			UpdatedAt:            updated,
 			Active:               name == active,
 		})
