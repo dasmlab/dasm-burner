@@ -48,16 +48,7 @@ func StartingObjectPressure() *Config {
 
 // DefaultPressureObjects is the stock palette (enable checkboxes in UI).
 func DefaultPressureObjects() []PressureObject {
-	return []PressureObject{
-		{ID: "configmap", Enabled: true, APIVersion: "v1", Kind: "ConfigMap", ReplicasPerNS: 10, TemplateRef: "configmap"},
-		{ID: "secret", Enabled: true, APIVersion: "v1", Kind: "Secret", ReplicasPerNS: 10, TemplateRef: "secret"},
-		{ID: "serviceaccount", Enabled: true, APIVersion: "v1", Kind: "ServiceAccount", ReplicasPerNS: 5, TemplateRef: "serviceaccount"},
-		{ID: "rolebinding", Enabled: true, APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding", ReplicasPerNS: 5, TemplateRef: "rolebinding"},
-		{ID: "networkpolicy", Enabled: false, APIVersion: "networking.k8s.io/v1", Kind: "NetworkPolicy", ReplicasPerNS: 2, TemplateRef: "networkpolicy"},
-		{ID: "limitrange", Enabled: false, APIVersion: "v1", Kind: "LimitRange", ReplicasPerNS: 1, TemplateRef: "limitrange"},
-		{ID: "resourcequota", Enabled: false, APIVersion: "v1", Kind: "ResourceQuota", ReplicasPerNS: 1, TemplateRef: "resourcequota"},
-		{ID: "egressfirewall", Enabled: false, APIVersion: "k8s.ovn.org/v1", Kind: "EgressFirewall", ReplicasPerNS: 1, TemplateRef: "egressfirewall", Required: false},
-	}
+	return PressureCatalog()
 }
 
 func Default() *Config {
@@ -176,8 +167,8 @@ func ApplyDefaults(c *Config) {
 	if c.Topology.Relationships.RouteToService == "" {
 		c.Topology.Relationships.RouteToService = d.Topology.Relationships.RouteToService
 	}
-	if c.Kind == KindObjectPressure && len(c.Topology.Objects) == 0 {
-		c.Topology.Objects = DefaultPressureObjects()
+	if c.Kind == KindObjectPressure {
+		c.Topology.Objects = MergePressureCatalog(c.Topology.Objects)
 	}
 	for i := range c.Topology.Objects {
 		if c.Topology.Objects[i].ReplicasPerNS < 1 {

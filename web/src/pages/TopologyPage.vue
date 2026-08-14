@@ -55,7 +55,7 @@
     </div>
 
     <div class="row q-col-gutter-md">
-      <div class="col-12 col-md-2">
+      <div class="col-12 col-md-3">
         <div class="dasm-panel" v-if="!isPressure">
           <div class="dasm-stat-label q-mb-sm">Palette</div>
           <div
@@ -73,29 +73,59 @@
             </div>
           </div>
         </div>
-        <div class="dasm-panel" v-else>
-          <div class="dasm-stat-label q-mb-sm">Object kinds</div>
-          <div v-for="o in model.objects" :key="o.id" class="q-mb-sm">
-            <q-toggle v-model="o.enabled" :label="o.kind || o.id" dense />
-            <q-input
-              v-if="o.enabled"
-              v-model.number="o.replicasPerNamespace"
-              type="number"
-              min="1"
-              dense
-              outlined
-              label="replicas / NS"
-              class="q-mt-xs"
-            />
+        <div class="dasm-panel object-kinds-panel" v-else>
+          <div class="row items-center no-wrap q-mb-sm">
+            <div class="dasm-stat-label">Object kinds</div>
+            <q-space />
+            <span class="text-caption text-grey-7">{{ enabledKindCount }} on</span>
+          </div>
+          <q-input v-model="kindFilter" dense outlined debounce="100" placeholder="Filter kinds or GVK" class="q-mb-sm">
+            <template #prepend><q-icon name="search" /></template>
+            <template #append>
+              <q-icon v-if="kindFilter" name="close" class="cursor-pointer" @click="kindFilter = ''" />
+            </template>
+          </q-input>
+          <div class="kind-scroll">
+            <div v-for="g in groupedObjects" :key="g.id" class="kind-group">
+              <div class="kind-group__title">{{ g.label }}</div>
+              <div
+                v-for="o in g.items"
+                :key="o.id"
+                class="kind-row"
+                :class="{ on: o.enabled, active: selected === o.id }"
+                @click="selected = o.id"
+              >
+                <q-toggle v-model="o.enabled" dense @click.stop />
+                <div class="kind-row__meta">
+                  <div class="kind-row__name">{{ o.kind || o.id }}</div>
+                  <div class="kind-row__gvk">{{ o.apiVersion }}{{ o.clusterScoped ? ' · cluster' : '' }}</div>
+                </div>
+                <q-input
+                  v-model.number="o.replicasPerNamespace"
+                  type="number"
+                  min="1"
+                  dense
+                  outlined
+                  input-class="text-right"
+                  class="kind-row__n"
+                  :disable="!o.enabled"
+                  @click.stop
+                />
+              </div>
+            </div>
+            <div v-if="!groupedObjects.length" class="text-caption text-grey-7 q-pa-sm">No kinds match that filter.</div>
           </div>
           <q-separator class="q-my-sm" />
           <div class="dasm-stat-label q-mb-xs">+ Add Custom</div>
-          <q-input v-model="customGVK" dense outlined label="apiVersion/Kind" class="q-mb-xs" hint="e.g. example.com/v1/Widget" />
+          <div class="text-caption text-grey-7 q-mb-xs">
+            Known kinds (SubjectAccessReview, Lease, HPA, …) resolve automatically. Unknown CRDs stay custom.
+          </div>
+          <q-input v-model="customGVK" dense outlined label="kind or apiVersion/Kind" class="q-mb-xs" hint="subjectaccessreviews or example.com/v1/Widget" />
           <q-input v-model.number="customReplicas" type="number" min="1" dense outlined label="replicas / NS" class="q-mb-xs" />
-          <q-btn outline color="primary" dense label="Add custom" class="full-width" @click="addCustom" />
+          <q-btn outline color="primary" dense label="Add" class="full-width" @click="addCustom" />
         </div>
       </div>
-      <div class="col-12 col-md-7">
+      <div class="col-12 col-md-6">
         <TopologyCanvas :model="model" :selected="selected" @select="selected = $event" @drop="onDropKind" />
       </div>
       <div class="col-12 col-md-3">
@@ -120,6 +150,7 @@
           <template v-else>
             <div class="text-caption text-grey-7">
               Apply path: <strong>kube-burner init</strong>. Missing CRDs are skipped with a warning unless marked required.
+              SubjectAccessReview / TokenReview are API review objects (often not etcd-resident) — those huge counts are usually request volume.
             </div>
             <div v-if="selectedObj" class="q-mt-md">
               <div class="dasm-stat-label">Selected · {{ selectedObj.id }}</div>
@@ -181,6 +212,8 @@ const saveAsName = ref('')
 const templates = ref([])
 const customGVK = ref('')
 const customReplicas = ref(5)
+const kindFilter = ref('')
+const catalog = ref([])
 const iterationVar = '{{.Iteration}}'
 const replicaVar = '{{.Replica}}'
 const model = reactive({
@@ -216,6 +249,40 @@ const relOptions = [
 
 const isPressure = computed(() => model.kind === 'OpenShiftObjectPressure')
 const selectedObj = computed(() => (model.objects || []).find((o) => o.id === selected.value) || null)
+const enabledKindCount = computed(() => (model.objects || []).filter((o) => o.enabled).length)
+
+function normGVK(s) {
+  return (s || '').trim().toLowerCase().replace(/\s+/g, '')
+}
+
+const categoryLabels = {
+  core: 'Core',
+  rbac: 'RBAC',
+  authz: 'Authz / reviews',
+  coord: 'Coordination',
+  net: 'Network',
+  scale: 'Autoscaling',
+  observe: 'Observability',
+  openshift: 'OpenShift',
+  custom: 'Custom CRDs',
+}
+
+const groupedObjects = computed(() => {
+  const q = normGVK(kindFilter.value)
+  const groups = []
+  const by = {}
+  for (const o of model.objects || []) {
+    const hay = normGVK(`${o.kind || ''} ${o.id || ''} ${o.apiVersion || ''} ${o.resource || ''}`)
+    if (q && !hay.includes(q)) continue
+    const cat = o.category || (o.custom ? 'custom' : 'core')
+    if (!by[cat]) {
+      by[cat] = { id: cat, label: categoryLabels[cat] || cat, items: [] }
+      groups.push(by[cat])
+    }
+    by[cat].items.push(o)
+  }
+  return groups.filter((g) => g.items.length)
+})
 
 const templateOptions = computed(() =>
   templates.value.map((t) => ({
@@ -273,18 +340,10 @@ jobs:
     # relation: ${model.routeToService}`
 })
 
-const defaultPressureObjects = () => ([
-  { id: 'configmap', enabled: true, apiVersion: 'v1', kind: 'ConfigMap', replicasPerNamespace: 10, templateRef: 'configmap' },
-  { id: 'secret', enabled: true, apiVersion: 'v1', kind: 'Secret', replicasPerNamespace: 10, templateRef: 'secret' },
-  { id: 'serviceaccount', enabled: true, apiVersion: 'v1', kind: 'ServiceAccount', replicasPerNamespace: 5, templateRef: 'serviceaccount' },
-  { id: 'rolebinding', enabled: true, apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'RoleBinding', replicasPerNamespace: 5, templateRef: 'rolebinding' },
-  { id: 'networkpolicy', enabled: false, apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', replicasPerNamespace: 2, templateRef: 'networkpolicy' },
-  { id: 'limitrange', enabled: false, apiVersion: 'v1', kind: 'LimitRange', replicasPerNamespace: 1, templateRef: 'limitrange' },
-  { id: 'resourcequota', enabled: false, apiVersion: 'v1', kind: 'ResourceQuota', replicasPerNamespace: 1, templateRef: 'resourcequota' },
-  { id: 'egressfirewall', enabled: false, apiVersion: 'k8s.ovn.org/v1', kind: 'EgressFirewall', replicasPerNamespace: 1, templateRef: 'egressfirewall' },
-])
+const defaultPressureObjects = () => structuredClone(catalog.value || [])
 
 function applyTopo(t) {
+  if (t.catalog?.length) catalog.value = t.catalog
   Object.assign(model, {
     name: t.name,
     kind: t.kind || 'OpenShiftNetworkDensity',
@@ -343,15 +402,51 @@ function onDropKind(kind) {
   }
 }
 
+function lookupCatalog(raw) {
+  const key = normGVK(raw)
+  if (!key) return null
+  const list = [...(catalog.value || []), ...(model.objects || [])]
+  return list.find((o) => {
+    const ids = [o.id, o.kind, o.resource, `${o.apiVersion}/${o.kind}`, `${o.apiVersion}/${o.resource}`]
+    return ids.some((x) => normGVK(x) === key)
+  }) || null
+}
+
 function addCustom() {
   const raw = (customGVK.value || '').trim()
   if (!raw) {
-    error.value = 'Enter apiVersion/Kind (e.g. example.com/v1/Widget)'
+    error.value = 'Enter a kind (subjectaccessreviews) or apiVersion/Kind (example.com/v1/Widget)'
+    return
+  }
+  const hit = lookupCatalog(raw)
+  if (hit) {
+    const existing = (model.objects || []).find((o) => o.id === hit.id || (o.kind === hit.kind && o.apiVersion === hit.apiVersion))
+    if (existing) {
+      existing.enabled = true
+      existing.custom = false
+      if (hit.apiVersion) existing.apiVersion = hit.apiVersion
+      if (hit.kind) existing.kind = hit.kind
+      if (hit.templateRef) existing.templateRef = hit.templateRef
+      if (hit.category) existing.category = hit.category
+      existing.replicasPerNamespace = Number(customReplicas.value) || existing.replicasPerNamespace || 1
+      selected.value = existing.id
+      customGVK.value = ''
+      error.value = ''
+      return
+    }
+    const copy = structuredClone(hit)
+    copy.enabled = true
+    copy.custom = false
+    copy.replicasPerNamespace = Number(customReplicas.value) || copy.replicasPerNamespace || 1
+    model.objects.push(copy)
+    selected.value = copy.id
+    customGVK.value = ''
+    error.value = ''
     return
   }
   const parts = raw.split('/').filter(Boolean)
   if (parts.length < 2) {
-    error.value = 'Custom GVK needs at least group/version/kind or v1/Kind'
+    error.value = 'Unknown kind — use apiVersion/Kind for a custom CRD (e.g. example.com/v1/Widget)'
     return
   }
   const kind = parts[parts.length - 1]
@@ -361,6 +456,7 @@ function addCustom() {
     id,
     enabled: true,
     custom: true,
+    category: 'custom',
     apiVersion,
     kind,
     replicasPerNamespace: Number(customReplicas.value) || 1,
@@ -484,5 +580,58 @@ onMounted(load)
   font-size: 0.78rem;
   line-height: 1.45;
   color: #1d2b36;
+}
+.object-kinds-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 640px);
+}
+.kind-scroll {
+  overflow-y: auto;
+  min-height: 180px;
+  flex: 1;
+  padding-right: 4px;
+}
+.kind-group__title {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5a6b78;
+  margin: 0.45rem 0 0.2rem;
+}
+.kind-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.15rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.kind-row:hover,
+.kind-row.active {
+  background: rgba(47, 143, 125, 0.08);
+}
+.kind-row.on .kind-row__name {
+  font-weight: 700;
+}
+.kind-row__meta {
+  flex: 1;
+  min-width: 0;
+}
+.kind-row__name {
+  font-size: 0.86rem;
+  line-height: 1.15;
+  color: #12202c;
+}
+.kind-row__gvk {
+  font-size: 0.68rem;
+  color: #5a6b78;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kind-row__n {
+  width: 64px;
+  flex: 0 0 64px;
 }
 </style>

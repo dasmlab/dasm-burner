@@ -22,6 +22,7 @@ type compactTopology struct {
 	ReplicasPerService   int    `json:"replicasPerService"`
 	RouteToService       string `json:"routeToService"`
 	Objects              any    `json:"objects,omitempty"`
+	Catalog              any    `json:"catalog,omitempty"`
 	Counts               any    `json:"counts,omitempty"`
 	KubeBurner           any    `json:"kubeBurner,omitempty"`
 	Warning              string `json:"warning,omitempty"`
@@ -38,6 +39,7 @@ func compactFrom(cfg *config.Config) compactTopology {
 		ReplicasPerService:   cfg.Topology.Workloads.ReplicasPerService,
 		RouteToService:       cfg.Topology.Relationships.RouteToService,
 		Objects:              cfg.Topology.Objects,
+		Catalog:              config.PressureCatalog(),
 		Counts:               cfg.Counts(),
 		Warning:              "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 		ActiveTemplate:       "",

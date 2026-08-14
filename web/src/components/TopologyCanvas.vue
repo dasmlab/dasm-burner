@@ -3,6 +3,7 @@
     <svg
       class="topo-svg"
       :viewBox="`0 0 ${vbW} ${vbH}`"
+      :style="{ height: svgH + 'px' }"
       preserveAspectRatio="xMidYMid meet"
       @dragover.prevent
       @drop.prevent="onDrop"
@@ -67,15 +68,7 @@ const props = defineProps({
 const emit = defineEmits(['select', 'drop'])
 
 const vbW = 920
-const vbH = 420
-const ns = { x: 28, y: 28, w: 864, h: 364 }
-
 const isPressure = computed(() => props.model.kind === 'OpenShiftObjectPressure')
-const nsSubtitle = computed(() =>
-  isPressure.value
-    ? 'kube-burner jobIterations · object-pressure init'
-    : 'kube-burner jobIterations · namespacedIterations',
-)
 
 const inner = computed(() => {
   if (props.model.namespaces < 1) return []
@@ -84,12 +77,14 @@ const inner = computed(() => {
     return objs.map((o, i) => {
       const col = i % 3
       const row = Math.floor(i / 3)
+      const gvk = o.apiVersion || ''
+      const extra = o.clusterScoped ? ' · cluster' : (o.custom ? ' · custom CRD' : '')
       return {
         id: o.id,
         label: o.kind || o.id,
         count: o.replicasPerNamespace || 1,
-        sub: o.custom ? 'custom GVK' : (o.apiVersion || ''),
-        cls: o.custom ? 'is-custom' : 'is-pressure',
+        sub: (gvk || (o.custom ? 'custom GVK' : '')) + extra,
+        cls: o.custom ? 'is-custom' : (o.clusterScoped ? 'is-authz' : 'is-pressure'),
         dim: false,
         x: 72 + col * 270,
         y: 100 + row * 90,
@@ -135,6 +130,16 @@ const inner = computed(() => {
   ]
 })
 
+const pressureRows = computed(() => Math.max(1, Math.ceil(((props.model.objects || []).filter((o) => o.enabled).length) / 3)))
+const vbH = computed(() => (isPressure.value ? Math.max(420, 130 + pressureRows.value * 90) : 420))
+const svgH = computed(() => Math.min(760, Math.max(420, vbH.value * 0.58)))
+const ns = computed(() => ({ x: 28, y: 28, w: 864, h: vbH.value - 56 }))
+const nsSubtitle = computed(() =>
+  isPressure.value
+    ? 'kube-burner jobIterations · object-pressure init'
+    : 'kube-burner jobIterations · namespacedIterations',
+)
+
 const edges = computed(() => {
   if (isPressure.value) return []
   const nodes = inner.value
@@ -173,11 +178,12 @@ function onDrop(ev) {
   border: 1px solid var(--dasm-border-soft);
   border-radius: 14px;
   background: #f7fbfa;
-  overflow: hidden;
+  overflow: auto;
+  max-height: min(76vh, 760px);
 }
 .topo-svg {
   width: 100%;
-  height: 420px;
+  min-height: 420px;
   display: block;
 }
 .box-ns {
@@ -195,6 +201,7 @@ function onDrop(ev) {
 .is-svc { fill: #2f8f7d; }
 .is-pod { fill: #70835a; }
 .is-pressure { fill: #3d6b8a; }
+.is-authz { fill: #6b4a8a; }
 .is-custom { fill: #b07a3d; }
 .dim { opacity: 0.45; }
 .active {

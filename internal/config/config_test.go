@@ -21,6 +21,42 @@ func TestStartingObjectPressureValidates(t *testing.T) {
 	}
 }
 
+func TestLookupPressureKind(t *testing.T) {
+	for _, q := range []string{
+		"subjectaccessreviews",
+		"SubjectAccessReview",
+		"authorization.k8s.io/v1/SubjectAccessReview",
+		"authorization.k8s.io/v1/subjectaccessreviews",
+		"authorization.k8s.io/subjectaccessreviews",
+	} {
+		got, ok := LookupPressureKind(q)
+		if !ok || got.Kind != "SubjectAccessReview" || got.APIVersion != "authorization.k8s.io/v1" || got.Custom {
+			t.Fatalf("%q -> %+v ok=%v", q, got, ok)
+		}
+	}
+	if _, ok := LookupPressureKind("services.desjardins.com/v1/User"); ok {
+		t.Fatal("tenant CRD should stay custom")
+	}
+}
+
+func TestMergePromotesCustomSAR(t *testing.T) {
+	merged := MergePressureCatalog([]PressureObject{
+		{ID: "custom-sar", Enabled: true, Custom: true, APIVersion: "authorization.k8s.io/v1", Kind: "subjectaccessreviews", ReplicasPerNS: 5},
+	})
+	found := false
+	for _, o := range merged {
+		if o.Kind == "SubjectAccessReview" {
+			found = true
+			if o.Custom || o.APIVersion != "authorization.k8s.io/v1" || !o.Enabled || o.ReplicasPerNS != 5 {
+				t.Fatalf("promoted SAR = %+v", o)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected SubjectAccessReview in merged catalog")
+	}
+}
+
 func TestDefaultValidates(t *testing.T) {
 	c := Default()
 	if err := Validate(c); err != nil {

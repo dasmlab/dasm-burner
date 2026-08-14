@@ -58,6 +58,8 @@ func WriteObjectPressureDir(outDir string, cfg *config.Config, g *topology.Graph
 		}
 		if o.WaitForReady {
 			entry["wait"] = true
+		} else {
+			entry["wait"] = false
 		}
 		objects = append(objects, entry)
 	}
@@ -262,5 +264,155 @@ spec:
     - type: Allow
       to:
         cidrSelector: 0.0.0.0/0
+`,
+	"event": `apiVersion: events.k8s.io/v1
+kind: Event
+metadata:
+  name: kb-{{.Iteration}}-ev-{{.Replica}}
+  labels:
+    dasm-burner.dasmlab.org/managed: "true"
+    dasm-burner.dasmlab.org/run: "{{.UUID}}"
+eventTime: "2026-01-01T00:00:00.000000Z"
+action: Pressure
+reason: ObjectPressure
+type: Normal
+reportingController: dasm-burner
+reportingInstance: "{{.UUID}}"
+regarding:
+  apiVersion: v1
+  kind: Namespace
+  name: kb-{{.Iteration}}
+`,
+	"endpointslice": `apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: kb-{{.Iteration}}-eps-{{.Replica}}
+  labels:
+    dasm-burner.dasmlab.org/managed: "true"
+    dasm-burner.dasmlab.org/run: "{{.UUID}}"
+addressType: IPv4
+endpoints: []
+ports:
+  - name: http
+    protocol: TCP
+    port: 8080
+`,
+	"role": `apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kb-{{.Iteration}}-role-{{.Replica}}
+  labels:
+    dasm-burner.dasmlab.org/managed: "true"
+    dasm-burner.dasmlab.org/run: "{{.UUID}}"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+`,
+	"clusterrole": `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kb-{{.UUID}}-cr-{{.Iteration}}-{{.Replica}}
+  labels:
+    dasm-burner.dasmlab.org/managed: "true"
+    dasm-burner.dasmlab.org/run: "{{.UUID}}"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+`,
+	"clusterrolebinding": `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kb-{{.UUID}}-crb-{{.Iteration}}-{{.Replica}}
+  labels:
+    dasm-burner.dasmlab.org/managed: "true"
+    dasm-burner.dasmlab.org/run: "{{.UUID}}"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: default
+`,
+	"subjectaccessreview": `apiVersion: authorization.k8s.io/v1
+kind: SubjectAccessReview
+spec:
+  user: dasm-burner
+  resourceAttributes:
+    namespace: default
+    verb: list
+    resource: pods
+`,
+	"localsubjectaccessreview": `apiVersion: authorization.k8s.io/v1
+kind: LocalSubjectAccessReview
+spec:
+  user: dasm-burner
+  resourceAttributes:
+    verb: list
+    resource: pods
+`,
+	"tokenreview": `apiVersion: authentication.k8s.io/v1
+kind: TokenReview
+spec:
+  token: dasm-burner-not-a-real-token
+`,
+	"lease": `apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: kb-{{.Iteration}}-lease-{{.Replica}}
+  labels:
+    dasm-burner.dasmlab.org/managed: "true"
+    dasm-burner.dasmlab.org/run: "{{.UUID}}"
+spec:
+  holderIdentity: dasm-burner-{{.Replica}}
+  leaseDurationSeconds: 30
+`,
+	"horizontalpodautoscaler": `apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: kb-{{.Iteration}}-hpa-{{.Replica}}
+  labels:
+    dasm-burner.dasmlab.org/managed: "true"
+    dasm-burner.dasmlab.org/run: "{{.UUID}}"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: kb-missing-target
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+`,
+	"servicemonitor": `apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kb-{{.Iteration}}-sm-{{.Replica}}
+  labels:
+    dasm-burner.dasmlab.org/managed: "true"
+    dasm-burner.dasmlab.org/run: "{{.UUID}}"
+spec:
+  selector:
+    matchLabels:
+      app: dasm-burner-none
+  endpoints:
+    - port: http
+`,
+	"imagestream": `apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: kb-{{.Iteration}}-is-{{.Replica}}
+  labels:
+    dasm-burner.dasmlab.org/managed: "true"
+    dasm-burner.dasmlab.org/run: "{{.UUID}}"
+spec: {}
 `,
 }
