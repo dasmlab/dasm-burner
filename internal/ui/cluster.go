@@ -28,6 +28,8 @@ type clusterState struct {
 	mu         sync.Mutex
 	kubeconfig string
 	context    string
+	source     string // in-cluster | kubeconfig | login-command | registry
+	name       string
 }
 
 func (s *Server) clusterState() *clusterState {
@@ -35,6 +37,22 @@ func (s *Server) clusterState() *clusterState {
 	defer s.mu.Unlock()
 	if s.clusters == nil {
 		s.clusters = &clusterState{kubeconfig: s.Kubeconfig}
+		if t, ok := s.loadPersistedCluster(); ok {
+			if t.isInCluster() {
+				s.clusters.kubeconfig = ""
+				s.clusters.context = ""
+				s.clusters.source = "in-cluster"
+				s.clusters.name = t.Name
+			} else {
+				s.clusters.kubeconfig = t.Kubeconfig
+				s.clusters.context = t.Context
+				s.clusters.source = t.Source
+				s.clusters.name = t.Name
+			}
+		} else if s.Kubeconfig == "" {
+			// Pod default: explicit in-cluster until the operator selects a remote.
+			s.clusters.source = "in-cluster"
+		}
 	}
 	return s.clusters
 }
@@ -96,11 +114,27 @@ func (s *Server) selectCluster(w http.ResponseWriter, r *http.Request) {
 	if pick.Source == "in-cluster" {
 		cs.kubeconfig = ""
 		cs.context = ""
+		cs.source = "in-cluster"
+		cs.name = pick.Name
 	} else {
 		cs.kubeconfig = pick.Kubeconfig
 		cs.context = pick.Context
+		cs.source = pick.Source
+		cs.name = pick.Name
+	}
+	persisted := clusterTarget{
+		Name:       pick.Name,
+		Source:     pick.Source,
+		Kubeconfig: pick.Kubeconfig,
+		Context:    pick.Context,
+		Server:     pick.Server,
+	}
+	if pick.Source == "in-cluster" {
+		persisted.Kubeconfig = ""
+		persisted.Context = ""
 	}
 	cs.mu.Unlock()
+	_ = s.persistSelectedCluster(persisted)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"current": s.currentCluster(),
 		"warning": "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",

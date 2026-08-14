@@ -79,6 +79,35 @@
       </div>
     </div>
 
+    <div v-if="nodeRoles.length" class="dasm-panel q-mb-lg">
+      <div class="dasm-stat-label q-mb-sm">Node roles</div>
+      <div class="text-caption text-grey-7 q-mb-sm">
+        Counts from <code>node-role.kubernetes.io/*</code>. Multi-role nodes appear in each matching bucket.
+        <span v-if="hasInfra"> Density workloads avoid infra taint when Execute avoid-taints is set.</span>
+      </div>
+      <table class="role-table">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Ready</th>
+            <th>NotReady</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="r in nodeRoles" :key="r.role" :class="{ 'is-bad': (r.notReady || 0) > 0 }">
+            <td>{{ r.role }}</td>
+            <td>{{ r.ready }}</td>
+            <td>
+              {{ r.notReady }}
+              <span v-if="r.nodes?.length" class="text-caption text-grey-7"> · {{ r.nodes.join(', ') }}</span>
+            </td>
+            <td>{{ r.total }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
     <div class="row items-center justify-between q-mb-sm q-mt-lg">
       <div class="text-subtitle1 text-weight-medium">OVN-Kube Diagnoser</div>
       <div class="row q-gutter-sm">
@@ -265,6 +294,8 @@ const restartsSinceLabel = computed(() => {
   return String(n)
 })
 const nodeTotal = computed(() => (h.value.nodesReady || 0) + (h.value.nodesNotReady || 0))
+const nodeRoles = computed(() => h.value.nodeRoles || [])
+const hasInfra = computed(() => nodeRoles.value.some((r) => r.role === 'infra'))
 const clusterMeta = computed(() => overview.value?.cluster || {})
 const clusterTitle = computed(() => clusterMeta.value.name || cluster.currentLabel.value || '…')
 const intended = computed(() => overview.value?.intended || [])
@@ -520,5 +551,19 @@ onUnmounted(() => {
     grid-template-columns: 1fr;
   }
   .cluster-hero__gate { text-align: left; }
+}
+.role-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.role-table th,
+.role-table td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--dasm-border-soft);
+}
+.role-table tr.is-bad td {
+  color: #b42318;
 }
 </style>

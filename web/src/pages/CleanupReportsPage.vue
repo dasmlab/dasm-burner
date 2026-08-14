@@ -106,6 +106,43 @@
 
           <div v-if="selected.error" class="text-negative q-mb-md">{{ selected.error }}</div>
 
+          <div v-if="obs" class="q-mb-lg">
+            <div class="dasm-stat-label q-mb-sm">Cluster observation during cleanup</div>
+            <div class="text-body2 q-mb-sm"><strong>Why?</strong> {{ obs.summary || '—' }}</div>
+            <div class="row q-col-gutter-sm q-mb-md">
+              <div class="col-6 col-sm-3">
+                <div class="metric-tile">
+                  <div class="dasm-stat-label">Max NotReady</div>
+                  <div class="text-h6">{{ obs.maxNotReady ?? 0 }}</div>
+                </div>
+              </div>
+              <div class="col-6 col-sm-3">
+                <div class="metric-tile">
+                  <div class="dasm-stat-label">Longest NotReady</div>
+                  <div class="text-h6">{{ obs.maxNotReadyDurationSec ?? 0 }}s</div>
+                </div>
+              </div>
+              <div class="col-6 col-sm-3">
+                <div class="metric-tile">
+                  <div class="dasm-stat-label">Monitoring OOM</div>
+                  <div class="text-h6">{{ obs.monitoringOOMTotal ?? 0 }}</div>
+                </div>
+              </div>
+              <div class="col-6 col-sm-3">
+                <div class="metric-tile">
+                  <div class="dasm-stat-label">Samples</div>
+                  <div class="text-h6">{{ (obs.samples || []).length }}</div>
+                </div>
+              </div>
+            </div>
+            <div v-if="(obs.incidents || []).length" class="q-mb-md">
+              <div class="dasm-stat-label q-mb-xs">Incidents</div>
+              <div v-for="(inc, i) in obs.incidents" :key="i" class="text-caption text-mono q-mb-xs">
+                {{ fmtTime(inc.at) }} · {{ inc.kind }} · {{ inc.message }}
+              </div>
+            </div>
+          </div>
+
           <div class="dasm-stat-label q-mb-sm">Cleanup log</div>
           <div class="log-canvas">
             <div v-for="(line, i) in (selected.logs || [])" :key="i" class="log-line" :class="`lv-${line.level}`">
@@ -153,6 +190,7 @@ const totals = computed(() => {
     Pods: t.pods ?? 0,
   }
 })
+const obs = computed(() => selected.value?.clusterObservation || null)
 
 function statusColor(st) {
   if (st === 'passed') return 'positive'

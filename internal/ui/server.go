@@ -70,6 +70,8 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/templates/", s.protect(s.templateByName))
 	s.Mux.Handle("/api/v1/cluster", s.protect(s.cluster))
 	s.Mux.Handle("/api/v1/cluster/login", s.protect(s.addClusterLogin))
+	s.Mux.Handle("/api/v1/cluster/capacity", s.protect(s.clusterCapacityAPI))
+	s.Mux.Handle("/api/v1/cluster/maxpods", s.protect(s.clusterMaxPodsAPI))
 	s.Mux.Handle("/api/v1/runs", s.protect(s.runs))
 	s.Mux.Handle("/api/v1/runs/", s.protect(s.runAction))
 	s.Mux.Handle("/api/v1/cleanup", s.protect(s.cleanupAPI))
@@ -218,15 +220,11 @@ func (s *Server) cfg() (*config.Config, error) {
 }
 
 func (s *Server) liveClient(qps float32, burst int) (kube.Cluster, error) {
-	cs := s.clusterState()
-	cs.mu.Lock()
-	kc := cs.kubeconfig
-	ctxName := cs.context
-	cs.mu.Unlock()
-	if kc == "" {
-		kc = s.Kubeconfig
+	t, err := s.snapshotTarget()
+	if err != nil {
+		return nil, err
 	}
-	return kube.NewLiveContext(kc, ctxName, qps, burst)
+	return t.client(qps, burst)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -236,6 +234,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
+	if ce, ok := err.(*kube.CapacityExceededError); ok {
+		writeJSON(w, status, map[string]any{
+			"error":    ce.Error(),
+			"code":     "capacity_exceeded",
+			"capacity": ce.Capacity,
+		})
+		return
+	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 

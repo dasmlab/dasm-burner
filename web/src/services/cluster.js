@@ -15,6 +15,11 @@ export function useCluster() {
     }
     return c.name || 'unknown'
   })
+  const isInCluster = computed(() => {
+    const c = current.value
+    if (!c) return false
+    return c.source === 'in-cluster' || (c.name && String(c.name).includes('in-cluster'))
+  })
 
   async function refresh() {
     const data = await getCluster()
@@ -36,13 +41,27 @@ export function useCluster() {
     await refresh()
   }
 
+  /** Re-fetch and require the server current name to match expected (guard stale UI). */
+  async function assertCurrent(expectedName) {
+    const data = await refresh()
+    const got = data.current?.name || ''
+    if (expectedName && got !== expectedName) {
+      throw new Error(
+        `Cluster selection drifted: UI expected "${expectedName}" but server is "${got || 'unknown'}". Re-select the cluster and try again.`,
+      )
+    }
+    return data.current
+  }
+
   return {
     clusters,
     current,
     currentName,
     currentLabel,
+    isInCluster,
     ready,
     refresh,
     select,
+    assertCurrent,
   }
 }
