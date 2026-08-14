@@ -101,13 +101,14 @@ type NetworkLayer struct {
 }
 
 type OVNNodeHealth struct {
-	NodeName     string        `json:"nodeName"`
-	OverallState HealthState   `json:"overallState"`
-	Node         NodeLayer     `json:"node"`
-	OVNKube      OVNKubeLayer  `json:"ovnKube"`
-	Network      NetworkLayer  `json:"network"`
-	Database     DatabaseLayer `json:"database"`
-	Findings     []Finding     `json:"findings,omitempty"`
+	NodeName     string         `json:"nodeName"`
+	OverallState HealthState    `json:"overallState"`
+	Node         NodeLayer      `json:"node"`
+	OVNKube      OVNKubeLayer   `json:"ovnKube"`
+	Network      NetworkLayer   `json:"network"`
+	Database     DatabaseLayer  `json:"database"`
+	Dataplane    DataplaneLayer `json:"dataplane"`
+	Findings     []Finding      `json:"findings,omitempty"`
 }
 
 // Snapshot is an immutable diagnoser view for a moment (or end-of-run freeze).

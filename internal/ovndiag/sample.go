@@ -81,6 +81,14 @@ func SampleWith(ctx context.Context, cs kubernetes.Interface, baseline *Baseline
 		}
 	}
 	caps.Capabilities["l4_ovn_db_containers"] = true
+	caps.Capabilities["l6_dataplane"] = true
+
+	window := opts.EventWindow
+	if window <= 0 {
+		window = 15 * time.Minute
+	}
+	dpSig := collectDataplaneSignals(ctx, cs, window)
+	onNode := ovnPodsByNode(ovnPods.Items)
 
 	var findings []Finding
 	now := time.Now()
@@ -98,9 +106,11 @@ func SampleWith(ctx context.Context, cs kubernetes.Interface, baseline *Baseline
 				}
 			}
 		}
+		nh.Dataplane = readDataplaneLayer(n, onNode[n.Name], dpSig)
 		nf := evaluateNode(nh, now, batchID, baseline)
 		nf = append(nf, evaluateNetwork(nh, now, batchID)...)
 		nf = append(nf, evaluateDatabase(nh, now, batchID)...)
+		nf = append(nf, evaluateDataplane(nh, dpSig, now, batchID)...)
 		nf = append(nf, evaluateResources(n.Name, nh.OVNKube.Resources, baseline, now, batchID)...)
 		nh.Findings = nf
 		nh.OverallState = worstState(StateHealthy, severitiesToState(nf)...)
@@ -121,10 +131,6 @@ func SampleWith(ctx context.Context, cs kubernetes.Interface, baseline *Baseline
 
 	findings = append(findings, controlPlaneFindings(ovnPods.Items, now, batchID)...)
 
-	window := opts.EventWindow
-	if window <= 0 {
-		window = 15 * time.Minute
-	}
 	if caps.CanListEvents {
 		evFindings, evTL := CollectOVNEvents(ctx, cs, window)
 		findings = append(findings, evFindings...)

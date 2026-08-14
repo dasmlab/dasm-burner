@@ -16,7 +16,7 @@ First-class component on the `development` branch. **Not** a kube-burner metrics
 | L3 | Pod metrics (metrics.k8s.io) CPU/mem vs baseline | yes (when API available) |
 | L4 | nbdb/sbdb/northd/ovn-controller Ready | yes |
 | L5 | `k8s.ovn.org/*` annotation consistency | yes |
-| L6 | Dataplane probes | stub |
+| L6 | Dataplane: OVS Ready, L3 gateway, FailedCreatePodSandBox, Pending-without-IP, drop-class logs | yes |
 | L7 | Batch correlation (OVN603) | yes |
 | — | Warning event aggregation | yes |
 | — | Targeted log class scanner | yes |
@@ -26,7 +26,7 @@ First-class component on the `development` branch. **Not** a kube-burner metrics
 
 ```
 internal/ovndiag/
-  discovery.go resources.go database.go network.go events.go logs.go
+  discovery.go resources.go database.go network.go dataplane.go events.go logs.go
   correlate.go watch.go baseline.go sample.go store.go catalog.go types.go
 ```
 

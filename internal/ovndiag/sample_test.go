@@ -59,4 +59,7 @@ func TestClassifyLog(t *testing.T) {
 	if got := classifyLog("hello world"); got != "" {
 		t.Fatalf("expected empty, got %q", got)
 	}
+	if got := classifyLog("conntrack table full, packet drop"); got != "DROP" {
+		t.Fatalf("got %q want DROP", got)
+	}
 }

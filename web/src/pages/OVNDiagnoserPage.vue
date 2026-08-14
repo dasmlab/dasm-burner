@@ -5,7 +5,7 @@
         <div class="dasm-caps">OVN-Kube Diagnoser</div>
         <h1 class="dasm-title">Is OVN becoming unhealthy?</h1>
         <p class="dasm-subtitle">
-          Active cluster interrogation (nodes, ovnkube pods, DB containers, metrics, logs, events) —
+          Active cluster interrogation (nodes, ovnkube pods, DB, dataplane, metrics, logs, events) —
           not a kube-burner dashboard. Capture a baseline before load, then sample during Execute.
         </p>
       </div>
@@ -54,10 +54,11 @@
                 <th>State</th>
                 <th>Ready</th>
                 <th>Annots</th>
-                <th>DB</th>
-                <th>OVN pod</th>
-                <th>Δ rst</th>
-                <th>CPU (Σ)</th>
+            <th>DB</th>
+            <th>DP</th>
+            <th>OVN pod</th>
+            <th>Δ rst</th>
+            <th>CPU (Σ)</th>
               </tr>
             </thead>
             <tbody>
@@ -72,6 +73,7 @@
                 <td>{{ n.node?.ready ? 'yes' : 'no' }}</td>
                 <td>{{ n.network?.annotationsOK === false ? 'drift' : 'ok' }}</td>
                 <td>{{ dbLabel(n.database) }}</td>
+                <td>{{ dpLabel(n.dataplane) }}</td>
                 <td class="text-mono">{{ shortPod(n.ovnKube?.podName) }}</td>
                 <td><strong>{{ n.ovnKube?.restartsDelta ?? 0 }}</strong></td>
                 <td>{{ cpuSum(n.ovnKube?.resources) }}</td>
@@ -87,6 +89,7 @@
             <li>Ready={{ nodeDetail.node?.ready }} MemoryPressure={{ nodeDetail.node?.memoryPressure }}</li>
             <li>Annots OK={{ nodeDetail.network?.annotationsOK }} zone={{ nodeDetail.network?.zone || '—' }}</li>
             <li>DB nbdb={{ nodeDetail.database?.nbdbReady }} sbdb={{ nodeDetail.database?.sbdbReady }} northd={{ nodeDetail.database?.northdReady }}</li>
+            <li>DP ovs={{ nodeDetail.dataplane?.ovsReady }} gw={{ nodeDetail.dataplane?.gatewayOK }} sandbox={{ nodeDetail.dataplane?.sandboxFailures ?? 0 }} pendingNoIP={{ nodeDetail.dataplane?.pendingNoIP ?? 0 }}</li>
             <li v-for="r in (nodeDetail.ovnKube?.resources || [])" :key="r.container">
               {{ r.container }}: {{ Number(r.cpuCores || 0).toFixed(3) }}c · {{ Number(r.memoryMiB || 0).toFixed(0) }}Mi
             </li>
@@ -163,6 +166,11 @@ function shortPod(n) {
 function dbLabel(d) {
   if (!d?.present) return '—'
   if (d.nbdbReady && d.sbdbReady && d.northdReady) return 'ok'
+  return 'warn'
+}
+function dpLabel(d) {
+  if (!d?.present) return '—'
+  if (d.ovsReady && d.gatewayOK && !(d.sandboxFailures > 0) && !(d.pendingNoIP > 0)) return 'ok'
   return 'warn'
 }
 function cpuSum(resources) {

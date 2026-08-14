@@ -53,6 +53,7 @@ func Discover(ctx context.Context, cs kubernetes.Interface) Caps {
 		c.CanReadPodLogs = true
 		c.Capabilities["pod_logs"] = true
 		c.Capabilities["l5_network_annotations"] = true
+		c.Capabilities["l6_dataplane"] = true
 		c.NodeAnnotKeys = requiredOVNAnnots()
 	}
 	return c

@@ -26,6 +26,12 @@ const (
 	RuleMissingAnnot       = "OVN402"
 	RuleMissingSubnet      = "OVN403"
 
+	RuleOVSNotReady     = "OVN501"
+	RuleGatewayInvalid  = "OVN502"
+	RuleSandboxFail     = "OVN503"
+	RuleNoPodIP         = "OVN504"
+	RulePacketDrop      = "OVN505"
+
 	RuleLogAnomaly      = "OVN601"
 	RuleErrorRateAccel  = "OVN602"
 	RuleCorrelatedBatch = "OVN603"

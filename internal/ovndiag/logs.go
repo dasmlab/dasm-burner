@@ -27,6 +27,7 @@ var logClasses = []struct {
 	{"IPTABLES", []string{"iptables", "nft"}},
 	{"FLOW", []string{"flow", "ofctl"}},
 	{"GATEWAY", []string{"gateway", "br-ex"}},
+	{"DROP", []string{"packet drop", "dropped packet", "packets dropped", "conntrack table full", "openflow drop"}},
 	{"OVS", []string{"ovs-vswitchd", "ovsdb-server"}},
 	{"OVN", []string{"ovn-controller", "ovnkube"}},
 	{"KERNEL", []string{"kernel", "oops", "soft lockup"}},
@@ -97,15 +98,20 @@ func ScanOVNLogs(ctx context.Context, cs kubernetes.Interface, pods []corev1.Pod
 			continue
 		}
 		sev := SevNotice
-		if h.Class == "ERROR" || h.Class == "TIMEOUT" || h.Class == "CONNECTION" {
+		if h.Class == "ERROR" || h.Class == "TIMEOUT" || h.Class == "CONNECTION" || h.Class == "DROP" {
 			sev = SevWarning
 		}
-		if h.Count >= 20 && (h.Class == "ERROR" || h.Class == "TIMEOUT") {
+		if h.Count >= 20 && (h.Class == "ERROR" || h.Class == "TIMEOUT" || h.Class == "DROP") {
 			sev = SevError
 		}
 		rule := RuleLogAnomaly
+		cat := CatLog
 		if h.Class == "ERROR" && h.Count >= 10 {
 			rule = RuleErrorRateAccel
+		}
+		if h.Class == "DROP" {
+			rule = RulePacketDrop
+			cat = CatDataplane
 		}
 		durMin := h.Last.Sub(h.First).Minutes()
 		if durMin < 0.05 {
@@ -116,7 +122,7 @@ func ScanOVNLogs(ctx context.Context, cs kubernetes.Interface, pods []corev1.Pod
 			ID:        fmt.Sprintf("%s-%s-%s-%d", rule, h.Node, h.Class, h.Last.Unix()),
 			RuleID:    rule,
 			Severity:  sev,
-			Category:  CatLog,
+			Category:  cat,
 			Node:      h.Node,
 			Component: h.Pod,
 			FirstSeen: h.First,
@@ -177,7 +183,7 @@ func ingestLogStream(r io.Reader, p corev1.Pod, hits map[string]*logHit, now tim
 
 func classifyLog(low string) string {
 	// Prefer specific classes before generic OVN/OVS.
-	order := []string{"KERNEL", "RAFT", "DATABASE", "CONNECTION", "TIMEOUT", "NETLINK", "IPTABLES", "FLOW", "GATEWAY", "ERROR", "WARN", "OVS", "OVN"}
+	order := []string{"KERNEL", "RAFT", "DATABASE", "CONNECTION", "TIMEOUT", "DROP", "NETLINK", "IPTABLES", "FLOW", "GATEWAY", "ERROR", "WARN", "OVS", "OVN"}
 	byName := map[string][]string{}
 	for _, c := range logClasses {
 		byName[c.Name] = c.Needles
