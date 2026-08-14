@@ -1,12 +1,12 @@
 <template>
-  <q-page padding>
-    <div class="dasm-shell q-mb-lg">
+  <q-page padding class="execute-page">
+    <div class="dasm-shell q-mb-md execute-hero">
       <div class="dasm-shell__content">
-        <div class="dasm-caps">Execute / Test</div>
+        <div class="dasm-caps">Execute</div>
         <h1 class="dasm-title">Run a saved template</h1>
         <p class="dasm-subtitle">
-          Select a saved topology (edit templates on Topology). Target cluster is in the header.
-          Pipeline steps light up like CI jobs while logs stream below.
+          Target cluster is the header dropdown. On this page: template → refresh state → clean → maxPods → execute.
+          The live log is the record.
         </p>
       </div>
     </div>
@@ -14,7 +14,7 @@
     <div v-if="error" class="dasm-panel q-mb-md text-negative">{{ error }}</div>
     <div v-if="interrupted" class="dasm-panel q-mb-md text-warning">
       Run <strong>{{ runPrefix }}</strong> was interrupted (server restart). Pipeline/log restored from disk —
-      apply may still be live on the cluster. Use Refresh / check state, then Clean if needed.
+      apply may still be live on the cluster. Use Refresh, then Clean if needed.
     </div>
     <div v-if="cleanupMsg" class="dasm-panel q-mb-md text-positive">
       {{ cleanupMsg }}
@@ -30,10 +30,10 @@
       />
     </div>
 
-    <div class="row q-col-gutter-md q-mb-md">
-      <div class="col-12 col-md-5">
-        <div class="dasm-panel">
-          <div class="dasm-stat-label q-mb-sm">Saved template</div>
+    <div class="dasm-panel control-deck q-mb-md" :class="{ 'is-live': running }">
+      <div class="control-deck__row">
+        <div class="control-template">
+          <div class="dasm-stat-label q-mb-xs">Saved template</div>
           <q-select
             v-model="templateName"
             :options="templateOptions"
@@ -44,37 +44,25 @@
             :disable="running"
             @update:model-value="onTemplate"
           />
-          <div v-if="selectedMeta" class="text-caption text-grey-7 q-mt-sm">
-            <span v-if="selectedMeta.prefix" class="text-mono text-weight-medium">{{ selectedMeta.prefix }}</span>
-            <span v-if="selectedMeta.prefix"> · </span>
-            <template v-if="selectedMeta.kind === 'OpenShiftObjectPressure'">
-              ObjectPressure · {{ selectedMeta.namespaces }} NS ·
-              {{ (selectedMeta.objects || []).filter((o) => o.enabled).length }} kinds ·
-              {{ selectedMeta.counts?.intendedObjects ?? '?' }} intended objects
-            </template>
-            <template v-else>
-              {{ selectedMeta.namespaces }} NS ·
-              {{ selectedMeta.routesPerNamespace }} routes ·
-              {{ selectedMeta.servicesPerNamespace }} services ·
-              {{ selectedMeta.replicasPerService }} pods/svc
-              <span v-if="selectedMeta.counts"> · {{ selectedMeta.counts.pods }} pods total</span>
-            </template>
+          <div class="meta-static q-mt-sm">
+            <code v-if="templatePrefix" class="pfx-chip">{{ templatePrefix }}</code>
+            <span v-if="selectedMeta">{{ templateRecipe }}</span>
+            <span v-else>Pick a template (edit on Topology).</span>
           </div>
-          <div class="row items-center q-gutter-sm q-mt-md">
+          <div class="live-row q-mt-sm">
             <q-chip
               dense
               square
+              class="live-chip"
               :color="deployChipColor"
               text-color="white"
               :icon="deployOnline ? 'cloud_done' : 'cloud_off'"
             >
               {{ deployLabel }}
             </q-chip>
-            <span v-if="deployPrefix" class="text-caption text-mono">{{ deployPrefix }}</span>
             <q-btn
-              flat
+              unelevated
               dense
-              size="sm"
               color="primary"
               icon="sync"
               label="Refresh / check state"
@@ -82,53 +70,25 @@
               :disable="running || cleaning"
               @click="checkState('manual refresh')"
             />
+            <q-btn
+              v-if="showReportLink"
+              unelevated
+              dense
+              color="secondary"
+              icon="assessment"
+              label="Report"
+              :to="reportRoute"
+            />
           </div>
-          <div class="text-caption text-grey-7 q-mt-xs">
-            State is live for <strong>{{ cluster.currentLabel.value }}</strong> only — flip clusters and refresh.
-          </div>
-          <div v-if="deployObjectsCaption" class="text-caption text-grey-7 q-mt-xs">{{ deployObjectsCaption }}</div>
+          <div v-if="deployObjectsCaption" class="meta-live q-mt-xs">{{ deployObjectsCaption }}</div>
         </div>
-      </div>
-      <div class="col-12 col-md-4">
-        <div class="dasm-panel">
-          <div class="dasm-stat-label q-mb-sm">Safety</div>
-          <q-toggle v-model="dryRun" label="Dry run (no create)" :disable="running" />
-          <q-toggle v-model="confirm" label="I understand this loads the control plane" :disable="running || dryRun" />
-          <q-toggle v-model="allowLarge" label="Allow >10 namespaces" :disable="running || dryRun" />
-          <q-toggle v-model="skipBaseline" label="Skip baseline wait" :disable="running" />
-          <q-toggle
-            v-model="enableOVNDiag"
-            label="Enable OVN Diagnoser samples"
-            :disable="running || dryRun"
-          />
-          <div class="text-caption text-grey-7 q-mb-sm">
-            When on: capture OVN baseline, 45s watch, and per-batch samples for the OVN Diagnoser history page.
-          </div>
-          <div class="dasm-stat-label q-mt-md q-mb-xs">Do not tolerate (taints)</div>
-          <q-select
-            v-model="avoidTaints"
-            :options="avoidTaintOptions"
-            dense
-            outlined
-            multiple
-            use-input
-            use-chips
-            new-value-mode="add-unique"
-            hide-dropdown-icon
-            input-debounce="0"
-            :disable="running"
-            hint="Pods will not tolerate these — keeps load off infra nodes"
-            @new-value="addAvoidTaint"
-          />
-        </div>
-      </div>
-      <div class="col-12 col-md-3">
-        <div class="dasm-panel column q-gutter-sm">
-          <div class="dasm-stat-label">Cluster</div>
-          <div class="text-body2">{{ cluster.currentLabel.value }}</div>
+        <div class="control-run">
+          <div class="dasm-stat-label q-mb-xs">Cluster</div>
+          <div class="control-run__name">{{ cluster.currentLabel.value }}</div>
           <q-btn
             color="primary"
             unelevated
+            class="full-width"
             icon="play_arrow"
             label="Execute test"
             :loading="starting"
@@ -138,6 +98,7 @@
           <q-btn
             outline
             color="negative"
+            class="full-width q-mt-sm"
             icon="stop"
             label="Cancel"
             :disable="!running"
@@ -145,153 +106,229 @@
           />
         </div>
       </div>
-    </div>
 
-    <div v-if="templatePrefix || runPrefix" class="dasm-panel q-mb-md run-meta">
-      <div class="row items-center q-col-gutter-md">
-        <div class="col-12 col-md-auto">
-          <div class="dasm-stat-label">This template prefix</div>
-          <div class="text-mono text-weight-bold">{{ templatePrefix || '—' }}</div>
+      <div class="stage-rail-wrap">
+        <div class="row items-center justify-between q-mb-xs">
+          <div class="dasm-stat-label">Stages</div>
+          <q-chip dense square :color="statusColor" text-color="white">{{ runStatus }}</q-chip>
         </div>
-        <div v-if="runPrefix && runPrefix !== templatePrefix" class="col-12 col-md-auto">
-          <div class="dasm-stat-label">Last / interrupted run</div>
-          <div class="text-mono text-weight-medium">{{ runPrefix }}</div>
-        </div>
-        <div class="col-12 col-md">
-          <div class="dasm-stat-label">Name pattern</div>
-          <div class="text-mono text-caption">{{ displayPattern || `${runPrefix}-{kind}-{seq:05d}-{sfx}` }}</div>
-          <div class="text-caption text-grey-7 q-mt-xs">
-            Namespaces look like <code>{{ templatePrefix || 'kb-xxxx' }}-ns-00001-…</code>
-            — burner (<code>kb</code>) → template run id → kind → batch seq → suffix.
-            Also labeled <code>dasm-burner.dasmlab.org/config={{ templateName || '…' }}</code>.
-          </div>
-        </div>
-        <div v-if="showReportLink" class="col-12 col-md-auto">
-          <q-btn
-            color="secondary"
-            unelevated
-            icon="assessment"
-            label="Open report"
-            :to="reportRoute"
-          />
-        </div>
-      </div>
-    </div>
-
-    <div class="dasm-panel q-mb-md">
-      <div class="row items-center justify-between q-mb-sm">
-        <div class="dasm-stat-label">Cleanup</div>
-        <div class="text-caption text-grey-7">
-          Managed label <code>dasm-burner.dasmlab.org/managed=true</code>
-          <span v-if="managedTotal != null"> · {{ managedTotal }} NS live</span>
-        </div>
-      </div>
-      <div class="row q-col-gutter-sm">
-        <div class="col-12 col-sm-auto">
-          <q-btn
-            outline
-            color="warning"
-            icon="delete_sweep"
-            label="Clean last run"
-            :loading="cleaning"
-            :disable="running || !templateName"
-            @click="doCleanup('last')"
-          />
-        </div>
-        <div class="col-12 col-sm-auto">
-          <q-btn
-            outline
-            color="warning"
-            icon="folder_delete"
-            label="Clean this template"
-            :loading="cleaning"
-            :disable="running || !templateName"
-            @click="doCleanup('template')"
-          />
-        </div>
-        <div class="col-12 col-sm-auto">
-          <q-btn
-            outline
-            color="negative"
-            icon="cleaning_services"
-            label="Clean all kb- runs"
-            :loading="cleaning"
-            :disable="running"
-            @click="doCleanup('all')"
-          />
-        </div>
-      </div>
-    </div>
-
-    <div class="dasm-panel q-mb-md">
-      <div class="row items-center justify-between q-mb-sm">
-        <div class="dasm-stat-label">Worker kubelet (this cluster)</div>
-        <div class="text-caption text-grey-7">
-          Density slots {{ capSlotsLabel }} · typical maxPods {{ capacity?.capacity?.maxPodsTypical ?? '…' }}
-        </div>
-      </div>
-      <div class="text-caption text-grey-7 q-mb-sm">
-        Replicas stay in the Topology template. This only changes OpenShift worker
-        <code>maxPods</code> (KubeletConfig) so Execute precheck can fit.
-      </div>
-      <div class="row items-center q-gutter-sm q-mb-sm">
-        <q-chip
-          dense
-          square
-          :color="maxPodsRolloutColor"
-          text-color="white"
-          :icon="maxPodsRolloutIcon"
-        >
-          rollout {{ workerMaxPods?.rollout || '…' }}
-        </q-chip>
-        <div class="text-caption">
-          <template v-if="workerMaxPods">
-            desired {{ workerMaxPods.configured ? workerMaxPods.desired : 'unset' }}
-            · live {{ workerMaxPods.observedMin === workerMaxPods.observedMax
-              ? workerMaxPods.observedTypical
-              : `${workerMaxPods.observedMin}–${workerMaxPods.observedMax}` }}
-            on {{ workerMaxPods.matchingNodes ?? 0 }}/{{ workerMaxPods.workerNodes ?? 0 }} workers
-            <span v-if="workerMaxPods.rolloutReason"> — {{ workerMaxPods.rolloutReason }}</span>
+        <div v-if="!steps.length" class="meta-static">No run yet — stages light up after Execute.</div>
+        <div v-else class="stage-rail">
+          <template v-for="(step, i) in steps" :key="step.id">
+            <button
+              type="button"
+              class="stage"
+              :class="[`is-${step.status}`, { active: pinnedStepId === step.id || (!pinnedStepId && step.status === 'running') }]"
+              @click="pinnedStepId = pinnedStepId === step.id ? '' : step.id"
+            >
+              <span class="stage-dot" />
+              <span class="stage-name">{{ shortStepLabel(step) }}</span>
+              <q-tooltip v-if="step.message || step.label" class="text-body2" max-width="360px">
+                {{ step.label }}<br />{{ step.message || step.status }}
+              </q-tooltip>
+            </button>
+            <span v-if="i < steps.length - 1" class="stage-join" :class="`is-${step.status}`" />
           </template>
-          <template v-else>Get current to read KubeletConfig + node capacity.pods</template>
         </div>
+        <div v-if="stageDetail" class="stage-detail">{{ stageDetail }}</div>
       </div>
-      <div class="row items-end q-col-gutter-sm">
-        <div class="col-12 col-sm-3">
-          <q-input
-            v-model.number="maxPodsInput"
-            type="number"
-            outlined
+    </div>
+
+    <div class="execute-body">
+      <aside class="execute-tools dasm-panel">
+        <q-expansion-item
+          v-model="tools.cleanup"
+          dense
+          switch-toggle-side
+          header-class="tool-head"
+          label="Cleanup"
+        >
+          <div class="tool-body">
+            <div class="meta-static q-mb-sm">
+              Wipe managed <code>kb-*</code> on the header cluster
+              <span v-if="managedTotal != null"> · {{ managedTotal }} NS live</span>
+            </div>
+            <q-btn
+              outline
+              dense
+              class="full-width q-mb-xs"
+              color="warning"
+              icon="delete_sweep"
+              label="Clean last run"
+              :loading="cleaning"
+              :disable="running || !templateName"
+              @click="doCleanup('last')"
+            />
+            <q-btn
+              outline
+              dense
+              class="full-width q-mb-xs"
+              color="warning"
+              icon="folder_delete"
+              label="Clean this template"
+              :loading="cleaning"
+              :disable="running || !templateName"
+              @click="doCleanup('template')"
+            />
+            <q-btn
+              outline
+              dense
+              class="full-width"
+              color="negative"
+              icon="cleaning_services"
+              label="Clean all kb- runs"
+              :loading="cleaning"
+              :disable="running"
+              @click="doCleanup('all')"
+            />
+          </div>
+        </q-expansion-item>
+
+        <q-separator />
+
+        <q-expansion-item
+          v-model="tools.kubelet"
+          dense
+          switch-toggle-side
+          header-class="tool-head"
+          label="Worker maxPods"
+        >
+          <div class="tool-body">
+            <div class="meta-live q-mb-sm">
+              <q-chip
+                dense
+                square
+                :color="maxPodsRolloutColor"
+                text-color="white"
+                :icon="maxPodsRolloutIcon"
+              >
+                rollout {{ workerMaxPods?.rollout || '…' }}
+              </q-chip>
+              <div class="q-mt-xs">
+                <template v-if="workerMaxPods">
+                  desired {{ workerMaxPods.configured ? workerMaxPods.desired : 'unset' }}
+                  · live {{ workerMaxPods.observedMin === workerMaxPods.observedMax
+                    ? workerMaxPods.observedTypical
+                    : `${workerMaxPods.observedMin}–${workerMaxPods.observedMax}` }}
+                  on {{ workerMaxPods.matchingNodes ?? 0 }}/{{ workerMaxPods.workerNodes ?? 0 }} workers
+                </template>
+                <template v-else>Get current to read this cluster’s kubelet.</template>
+              </div>
+              <div class="meta-static q-mt-xs">slots {{ capSlotsLabel }}</div>
+            </div>
+            <q-input
+              v-model.number="maxPodsInput"
+              type="number"
+              outlined
+              dense
+              label="maxPods"
+              min="110"
+              max="2000"
+              class="q-mb-sm"
+              :disable="running || cleaning || settingMaxPods"
+            />
+            <q-btn
+              outline
+              dense
+              class="full-width q-mb-xs"
+              color="primary"
+              icon="refresh"
+              label="Get current"
+              :loading="readingMaxPods"
+              :disable="running || cleaning || settingMaxPods"
+              @click="refreshMaxPods(true)"
+            />
+            <q-btn
+              outline
+              dense
+              class="full-width"
+              color="primary"
+              icon="memory"
+              label="Set worker maxPods"
+              :loading="settingMaxPods"
+              :disable="running || cleaning"
+              @click="openMaxPodsDialog"
+            />
+          </div>
+        </q-expansion-item>
+
+        <q-separator />
+
+        <q-expansion-item
+          v-model="tools.safety"
+          dense
+          switch-toggle-side
+          header-class="tool-head"
+          label="Safety"
+        >
+          <div class="tool-body">
+            <q-toggle v-model="dryRun" dense label="Dry run (no create)" :disable="running" />
+            <q-toggle v-model="confirm" dense label="I understand this loads the control plane" :disable="running || dryRun" />
+            <q-toggle v-model="allowLarge" dense label="Allow >10 namespaces" :disable="running || dryRun" />
+            <q-toggle v-model="skipBaseline" dense label="Skip baseline wait" :disable="running" />
+            <q-toggle v-model="enableOVNDiag" dense label="OVN Diagnoser samples" :disable="running || dryRun" />
+            <div class="dasm-stat-label q-mt-sm q-mb-xs">Do not tolerate</div>
+            <q-select
+              v-model="avoidTaints"
+              :options="avoidTaintOptions"
+              dense
+              outlined
+              multiple
+              use-input
+              use-chips
+              new-value-mode="add-unique"
+              hide-dropdown-icon
+              input-debounce="0"
+              :disable="running"
+              @new-value="addAvoidTaint"
+            />
+          </div>
+        </q-expansion-item>
+
+        <q-separator />
+
+        <q-expansion-item
+          v-model="tools.details"
+          dense
+          switch-toggle-side
+          header-class="tool-head"
+          :label="`Prefix ${templatePrefix || 'kb-…'}`"
+        >
+          <div class="tool-body text-caption">
+            <div class="text-mono">{{ displayPattern || `${templatePrefix || 'kb-xxxx'}-{kind}-{seq:05d}-{sfx}` }}</div>
+            <div v-if="runPrefix && runPrefix !== templatePrefix" class="q-mt-xs">
+              Last / interrupted run: <code>{{ runPrefix }}</code>
+            </div>
+            <div class="meta-static q-mt-xs">
+              NS look like <code>{{ templatePrefix || 'kb-xxxx' }}-ns-00001-…</code>
+              · labeled <code>dasm-burner.dasmlab.org/config={{ templateName || '…' }}</code>
+            </div>
+          </div>
+        </q-expansion-item>
+      </aside>
+
+      <section class="execute-log dasm-panel log-panel">
+        <div class="row items-center justify-between q-mb-sm">
+          <div class="dasm-stat-label">Live log</div>
+          <q-btn
+            flat
             dense
-            label="maxPods"
-            min="110"
-            max="2000"
-            :disable="running || cleaning || settingMaxPods"
+            size="sm"
+            icon="restart_alt"
+            label="Clear / reset"
+            :disable="running"
+            @click="clearLog"
           />
         </div>
-        <div class="col-12 col-sm-auto">
-          <q-btn
-            outline
-            color="primary"
-            icon="refresh"
-            label="Get current"
-            :loading="readingMaxPods"
-            :disable="running || cleaning || settingMaxPods"
-            @click="refreshMaxPods(true)"
-          />
+        <div ref="logEl" class="log-canvas">
+          <div v-for="(line, i) in logs" :key="i" class="log-line" :class="`lv-${line.level}`">
+            <span class="log-ts">{{ fmt(line.at) }}</span>
+            <span class="log-phase">{{ line.phase }}{{ line.batch ? ` #${line.batch}` : '' }}</span>
+            <span>{{ line.message }}</span>
+          </div>
+          <div v-if="!logs.length" class="text-caption text-grey-5">Waiting for events…</div>
         </div>
-        <div class="col-12 col-sm-auto">
-          <q-btn
-            outline
-            color="primary"
-            icon="memory"
-            label="Set worker maxPods"
-            :loading="settingMaxPods"
-            :disable="running || cleaning"
-            @click="openMaxPodsDialog"
-          />
-        </div>
-      </div>
+      </section>
     </div>
 
     <q-dialog v-model="maxPodsOpen" persistent>
@@ -327,61 +364,11 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
-
-    <div class="row q-col-gutter-md">
-      <div class="col-12 col-lg-5">
-        <div class="dasm-panel">
-          <div class="dasm-stat-label q-mb-md">Pipeline</div>
-          <div v-if="!steps.length" class="text-caption text-grey-7">No run yet.</div>
-          <div class="pipeline">
-            <div
-              v-for="step in steps"
-              :key="step.id"
-              class="pipe-step"
-              :class="`is-${step.status}`"
-            >
-              <div class="pipe-dot" />
-              <div class="pipe-body">
-                <div class="pipe-label">{{ step.label }}</div>
-                <div class="pipe-msg">{{ step.message || step.status }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-lg-7">
-        <div class="dasm-panel log-panel">
-          <div class="row items-center justify-between q-mb-sm">
-            <div class="dasm-stat-label">Live log</div>
-            <div class="row items-center q-gutter-sm">
-              <q-btn
-                flat
-                dense
-                size="sm"
-                icon="restart_alt"
-                label="Clear / reset"
-                :disable="running"
-                @click="clearLog"
-              />
-              <q-chip dense square :color="statusColor" text-color="white">{{ runStatus }}</q-chip>
-            </div>
-          </div>
-          <div ref="logEl" class="log-canvas">
-            <div v-for="(line, i) in logs" :key="i" class="log-line" :class="`lv-${line.level}`">
-              <span class="log-ts">{{ fmt(line.at) }}</span>
-              <span class="log-phase">{{ line.phase }}{{ line.batch ? ` #${line.batch}` : '' }}</span>
-              <span>{{ line.message }}</span>
-            </div>
-            <div v-if="!logs.length" class="text-caption text-grey-7">Waiting for events…</div>
-          </div>
-        </div>
-      </div>
-    </div>
   </q-page>
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   cancelRun,
   checkCleanupState,
@@ -430,6 +417,13 @@ const maxPodsOpen = ref(false)
 const settingMaxPods = ref(false)
 const readingMaxPods = ref(false)
 const workerMaxPods = ref(null)
+const pinnedStepId = ref('')
+const tools = reactive({
+  cleanup: true,
+  kubelet: true,
+  safety: false,
+  details: false,
+})
 let timer = null
 let cleanupPoll = null
 
@@ -449,6 +443,16 @@ const templateOptions = computed(() =>
   }),
 )
 const selectedMeta = computed(() => templates.value.find((t) => t.name === templateName.value))
+const templateRecipe = computed(() => {
+  const t = selectedMeta.value
+  if (!t) return ''
+  if (t.kind === 'OpenShiftObjectPressure') {
+    const kinds = (t.objects || []).filter((o) => o.enabled).length
+    return `${t.namespaces} NS · ${kinds} kinds · ${t.counts?.intendedObjects ?? '?'} intended`
+  }
+  const pods = t.counts?.pods ? ` · ${t.counts.pods} pods total` : ''
+  return `${t.namespaces} NS · ${t.routesPerNamespace} rt · ${t.servicesPerNamespace} svc · ${t.replicasPerService} pods/svc${pods}`
+})
 const steps = computed(() => run.value?.steps || [])
 const logs = computed(() => run.value?.logs || [])
 const runStatus = computed(() => run.value?.status || 'idle')
@@ -472,7 +476,6 @@ const reportRoute = computed(() => {
   return { name: 'report', query: q }
 })
 const deployOnline = computed(() => Boolean(deploy.value?.deployed))
-const deployPrefix = computed(() => deploy.value?.prefix || '')
 const deployLabel = computed(() => {
   if (!deploy.value) return 'deploy status…'
   const on = deployCluster.value || cluster.currentLabel.value
@@ -537,6 +540,23 @@ const statusColor = computed(() => {
     case 'aborted': return 'negative'
     default: return 'grey-6'
   }
+})
+
+function shortStepLabel(step) {
+  const l = step?.label || ''
+  const batch = l.match(/^Batch\s+(\d+)/i)
+  if (batch) return `B${batch[1]}`
+  if (/settle/i.test(l)) return 'Settle'
+  if (/convergence/i.test(l)) return 'Conv'
+  return l.split(/[·]/)[0].trim() || step.id
+}
+
+const stageDetail = computed(() => {
+  const id = pinnedStepId.value || steps.value.find((s) => s.status === 'running')?.id
+  const s = steps.value.find((x) => x.id === id)
+  if (!s) return ''
+  const msg = s.message || s.status
+  return msg && msg !== s.label ? `${s.label} — ${msg}` : s.label
 })
 
 function fmt(at) {
@@ -905,72 +925,182 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.pipeline {
+.execute-hero :deep(.dasm-shell__content) {
+  padding: 0.7rem 1rem;
+}
+.execute-hero .dasm-title {
+  margin: 0.15rem 0 0.25rem;
+  font-size: clamp(1.2rem, 2vw, 1.65rem);
+}
+.execute-hero .dasm-subtitle {
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.control-deck.is-live {
+  box-shadow: 0 0 0 1px rgba(224, 184, 74, 0.35), 0 10px 28px rgba(18, 32, 44, 0.08);
+}
+.control-deck__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 240px);
+  gap: 1rem;
+  align-items: stretch;
+}
+.control-run {
+  padding: 0.15rem 0 0.15rem 1rem;
+  border-left: 1px solid var(--dasm-border-soft);
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  justify-content: flex-end;
 }
-.pipe-step {
-  display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
-  padding: 0.55rem 0.65rem;
-  border-radius: 10px;
-  border: 1px solid var(--dasm-border-soft);
-  background: #f4f7fa;
-  opacity: 0.72;
-  transition: background 0.2s, opacity 0.2s, border-color 0.2s;
-}
-.pipe-dot {
-  width: 14px;
-  height: 14px;
-  margin-top: 3px;
-  border-radius: 50%;
-  background: #9aa7b2;
-  flex-shrink: 0;
-}
-.pipe-label {
+.control-run__name {
+  font-family: Fraunces, Georgia, serif;
+  font-size: 1.15rem;
   font-weight: 700;
   color: #1d2b36;
+  margin-bottom: 0.65rem;
+  word-break: break-word;
 }
-.pipe-msg {
+.meta-static {
   font-size: 0.78rem;
+  color: #6f7f8d;
+  line-height: 1.4;
+}
+.meta-live {
+  font-size: 0.8rem;
+  color: #1d2b36;
+  font-weight: 600;
+}
+.pfx-chip {
+  display: inline-block;
+  margin-right: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 6px;
+  background: #eef3f8;
+  color: #1d2b36;
+  font-weight: 700;
+}
+.live-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+.live-chip {
+  max-width: 100%;
+}
+
+.stage-rail-wrap {
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--dasm-border-soft);
+}
+.stage-rail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 0.45rem;
+}
+.stage {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  width: 52px;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+.stage-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #9aa7b2;
+  box-shadow: 0 0 0 3px rgba(154, 167, 178, 0.18);
+}
+.stage-name {
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
   color: #607483;
+  font-weight: 600;
+  line-height: 1.1;
+  text-align: center;
+}
+.stage-join {
+  width: 16px;
+  height: 2px;
+  background: #c5d0d8;
+  margin: 6px 1px 0;
+  flex-shrink: 0;
+}
+.stage.is-pending { opacity: 0.5; }
+.stage.is-running { opacity: 1; }
+.stage.is-running .stage-dot {
+  background: #e0b84a;
+  box-shadow: 0 0 0 4px rgba(224, 184, 74, 0.28);
+  animation: stage-pulse 1.4s ease-in-out infinite;
+}
+.stage.is-running .stage-name { color: #8a6a12; font-weight: 800; }
+.stage.is-passed { opacity: 1; }
+.stage.is-passed .stage-dot { background: #56ba6d; box-shadow: 0 0 0 3px rgba(86, 186, 109, 0.22); }
+.stage.is-passed .stage-name { color: #2d6b3e; }
+.stage.is-failed { opacity: 1; }
+.stage.is-failed .stage-dot { background: #cc4757; box-shadow: 0 0 0 3px rgba(204, 71, 87, 0.22); }
+.stage.is-failed .stage-name { color: #9a2b38; }
+.stage.is-skipped { opacity: 0.6; }
+.stage.active .stage-name { text-decoration: underline; text-underline-offset: 2px; }
+.stage-join.is-passed { background: #56ba6d; }
+.stage-join.is-running { background: #e0b84a; }
+.stage-join.is-failed { background: #cc4757; }
+.stage-detail {
+  margin-top: 0.55rem;
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #1d2b36;
+  background: #f4f7fa;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+}
+@keyframes stage-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(224, 184, 74, 0.22); }
+  50% { box-shadow: 0 0 0 7px rgba(224, 184, 74, 0.12); }
+}
+
+.execute-body {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.execute-tools {
+  padding: 0.35rem 0.55rem 0.55rem;
+}
+.tool-head {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f7f8d;
+  font-weight: 700;
+  min-height: 36px;
+}
+.tool-body {
+  padding: 0 0.35rem 0.75rem;
+}
+.execute-log {
+  min-width: 0;
+}
+
+.text-mono,
+.pfx-chip {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-.is-pending { opacity: 0.55; }
-.is-running {
-  opacity: 1;
-  background: #fff8e6;
-  border-color: #e0b84a;
-}
-.is-running .pipe-dot { background: #e0b84a; box-shadow: 0 0 0 4px rgba(224, 184, 74, 0.25); }
-.is-passed {
-  opacity: 1;
-  background: #eaf7f0;
-  border-color: #56ba6d;
-}
-.is-passed .pipe-dot { background: #56ba6d; }
-.is-failed {
-  opacity: 1;
-  background: #fceeef;
-  border-color: #cc4757;
-}
-.is-failed .pipe-dot { background: #cc4757; }
-.is-skipped {
-  opacity: 0.65;
-  background: #eef2f5;
-}
-.is-skipped .pipe-dot { background: #90a0ad; }
 
-.run-meta .text-mono,
-.text-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-.log-panel { min-height: 420px; }
 .log-canvas {
-  height: 420px;
+  height: calc(100vh - 17.5rem);
+  min-height: 520px;
+  max-height: 860px;
   overflow: auto;
   background: #12202c;
   color: #d7e2ea;
@@ -990,4 +1120,21 @@ onUnmounted(() => {
 }
 .lv-error { color: #ff8a96; }
 .lv-warn { color: #f0d792; }
+
+@media (max-width: 1023px) {
+  .control-deck__row,
+  .execute-body {
+    grid-template-columns: 1fr;
+  }
+  .control-run {
+    border-left: 0;
+    padding-left: 0;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--dasm-border-soft);
+  }
+  .log-canvas {
+    height: min(50vh, 560px);
+    min-height: 360px;
+  }
+}
 </style>
