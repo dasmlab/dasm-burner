@@ -6,7 +6,7 @@
         <h1 class="dasm-title">Compact topology</h1>
         <p class="dasm-subtitle">
           Density (Route→Service→Pod) or ObjectPressure (ConfigMaps/Secrets/CRDs via kube-burner init).
-          One Namespace box with instance counts — not N drawn namespaces.
+          Name and namespace count live in the bar above; kinds take the main column.
         </p>
       </div>
     </div>
@@ -15,7 +15,7 @@
 
     <div class="dasm-panel q-mb-md">
       <div class="row items-end q-col-gutter-md">
-        <div class="col-12 col-md-4">
+        <div class="col-12 col-md-3">
           <q-select
             v-model="activeName"
             :options="templateOptions"
@@ -39,6 +39,12 @@
             @update:model-value="onKindChange"
           />
         </div>
+        <div class="col-12 col-sm-4 col-md-2">
+          <q-input v-model="model.name" dense outlined label="Name" />
+        </div>
+        <div class="col-6 col-sm-3 col-md-1">
+          <q-input v-model.number="model.namespaces" type="number" min="1" dense outlined label="NS" />
+        </div>
         <div class="col-12 col-md-2">
           <q-input v-model="saveAsName" dense outlined label="Save as (optional)" />
         </div>
@@ -52,15 +58,108 @@
           <q-btn flat color="negative" icon="delete" :disable="!activeName" @click="remove" />
         </div>
       </div>
-      <div v-if="activePrefix" class="text-caption text-grey-7 q-mt-sm">
-        Cluster names use prefix <code class="text-mono">{{ activePrefix }}</code>
-        (Save as assigns a new prefix so copies do not share <code>kb-6a98</code> with smoke).
+      <div class="text-caption text-grey-7 q-mt-sm">
+        <span v-if="activePrefix">
+          Cluster prefix <code class="text-mono">{{ activePrefix }}</code>
+          — Save as assigns a new prefix so copies do not share smoke’s <code>kb-6a98</code>.
+        </span>
+        <span v-if="isPressure">
+          <span v-if="activePrefix"> · </span>
+          Apply is <strong>kube-burner init</strong>. Toggle kinds below; counts are replicas per namespace.
+          Missing CRDs skip with a warning unless marked required.
+        </span>
       </div>
     </div>
 
-    <div class="row q-col-gutter-md">
+    <div v-if="isPressure" class="row q-col-gutter-md">
+      <div class="col-12 col-lg-8">
+        <div class="dasm-panel object-kinds-panel">
+          <div class="row items-center q-col-gutter-sm q-mb-sm">
+            <div class="col-auto dasm-stat-label">Object kinds</div>
+            <div class="col-12 col-sm">
+              <q-input v-model="kindFilter" dense outlined debounce="100" placeholder="Filter kinds or GVK">
+                <template #prepend><q-icon name="search" /></template>
+                <template #append>
+                  <q-icon v-if="kindFilter" name="close" class="cursor-pointer" @click="kindFilter = ''" />
+                </template>
+              </q-input>
+            </div>
+            <div class="col-auto text-caption text-grey-7">{{ enabledKindCount }} on · n = replicas / NS</div>
+          </div>
+          <div class="kind-scroll">
+            <div v-for="g in groupedObjects" :key="g.id" class="kind-group">
+              <div class="kind-group__title">{{ g.label }}</div>
+              <div class="kind-grid">
+                <div
+                  v-for="o in g.items"
+                  :key="o.id"
+                  class="kind-row"
+                  :class="{ on: o.enabled, active: selected === o.id }"
+                  @click="selected = o.id"
+                >
+                  <q-toggle v-model="o.enabled" dense @click.stop />
+                  <div class="kind-row__meta">
+                    <div class="kind-row__name">{{ o.kind || o.id }}</div>
+                    <div class="kind-row__gvk">{{ o.apiVersion }}{{ o.clusterScoped ? ' · cluster' : '' }}</div>
+                  </div>
+                  <q-input
+                    v-model.number="o.replicasPerNamespace"
+                    type="number"
+                    min="1"
+                    dense
+                    outlined
+                    input-class="text-right"
+                    class="kind-row__n"
+                    :disable="!o.enabled"
+                    @click.stop
+                  />
+                </div>
+              </div>
+            </div>
+            <div v-if="!groupedObjects.length" class="text-caption text-grey-7 q-pa-sm">No kinds match that filter.</div>
+          </div>
+          <q-separator class="q-my-sm" />
+          <div class="row items-end q-col-gutter-sm">
+            <div class="col-12 col-md-6">
+              <q-input v-model="customGVK" dense outlined label="+ Add kind or apiVersion/Kind" hint="Pod, subjectaccessreviews, or example.com/v1/Widget" />
+            </div>
+            <div class="col-6 col-md-3">
+              <q-input v-model.number="customReplicas" type="number" min="1" dense outlined label="replicas / NS" />
+            </div>
+            <div class="col-6 col-md-3">
+              <q-btn outline color="primary" class="full-width" label="Add" @click="addCustom" />
+            </div>
+          </div>
+          <div v-if="selectedObj" class="selected-kind q-mt-md">
+            <div class="dasm-stat-label q-mb-xs">Selected · {{ selectedObj.kind || selectedObj.id }}</div>
+            <div class="row q-col-gutter-sm items-end">
+              <div class="col-12 col-sm-4">
+                <q-input v-model="selectedObj.apiVersion" dense outlined label="apiVersion" />
+              </div>
+              <div class="col-12 col-sm-4">
+                <q-input v-model="selectedObj.kind" dense outlined label="kind" />
+              </div>
+              <div class="col-12 col-sm-4">
+                <q-toggle v-model="selectedObj.required" label="Required (fail if CRD missing)" dense />
+                <q-btn v-if="selectedObj.custom" flat dense color="negative" label="Remove custom" @click="removeSelected" />
+              </div>
+              <div class="col-12" v-if="selectedObj.custom">
+                <q-input v-model="selectedObj.inlineYAML" type="textarea" autogrow dense outlined label="inline YAML (optional)" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-lg-4">
+        <div class="topo-sticky">
+          <TopologyCanvas compact :model="model" :selected="selected" @select="selected = $event" @drop="onDropKind" />
+        </div>
+      </div>
+    </div>
+
+    <div v-else class="row q-col-gutter-md">
       <div class="col-12 col-md-3">
-        <div class="dasm-panel" v-if="!isPressure">
+        <div class="dasm-panel">
           <div class="dasm-stat-label q-mb-sm">Palette</div>
           <div
             v-for="p in densityPalette"
@@ -77,103 +176,25 @@
             </div>
           </div>
         </div>
-        <div class="dasm-panel object-kinds-panel" v-else>
-          <div class="row items-center no-wrap q-mb-sm">
-            <div class="dasm-stat-label">Object kinds</div>
-            <q-space />
-            <span class="text-caption text-grey-7">{{ enabledKindCount }} on</span>
-          </div>
-          <q-input v-model="kindFilter" dense outlined debounce="100" placeholder="Filter kinds or GVK" class="q-mb-sm">
-            <template #prepend><q-icon name="search" /></template>
-            <template #append>
-              <q-icon v-if="kindFilter" name="close" class="cursor-pointer" @click="kindFilter = ''" />
-            </template>
-          </q-input>
-          <div class="kind-scroll">
-            <div v-for="g in groupedObjects" :key="g.id" class="kind-group">
-              <div class="kind-group__title">{{ g.label }}</div>
-              <div
-                v-for="o in g.items"
-                :key="o.id"
-                class="kind-row"
-                :class="{ on: o.enabled, active: selected === o.id }"
-                @click="selected = o.id"
-              >
-                <q-toggle v-model="o.enabled" dense @click.stop />
-                <div class="kind-row__meta">
-                  <div class="kind-row__name">{{ o.kind || o.id }}</div>
-                  <div class="kind-row__gvk">{{ o.apiVersion }}{{ o.clusterScoped ? ' · cluster' : '' }}</div>
-                </div>
-                <q-input
-                  v-model.number="o.replicasPerNamespace"
-                  type="number"
-                  min="1"
-                  dense
-                  outlined
-                  input-class="text-right"
-                  class="kind-row__n"
-                  :disable="!o.enabled"
-                  @click.stop
-                />
-              </div>
-            </div>
-            <div v-if="!groupedObjects.length" class="text-caption text-grey-7 q-pa-sm">No kinds match that filter.</div>
-          </div>
-          <q-separator class="q-my-sm" />
-          <div class="dasm-stat-label q-mb-xs">+ Add Custom</div>
-          <div class="text-caption text-grey-7 q-mb-xs">
-            Known kinds (SubjectAccessReview, Lease, HPA, …) resolve automatically. Unknown CRDs stay custom.
-          </div>
-          <q-input v-model="customGVK" dense outlined label="kind or apiVersion/Kind" class="q-mb-xs" hint="subjectaccessreviews or example.com/v1/Widget" />
-          <q-input v-model.number="customReplicas" type="number" min="1" dense outlined label="replicas / NS" class="q-mb-xs" />
-          <q-btn outline color="primary" dense label="Add" class="full-width" @click="addCustom" />
-        </div>
       </div>
       <div class="col-12 col-md-6">
         <TopologyCanvas :model="model" :selected="selected" @select="selected = $event" @drop="onDropKind" />
       </div>
       <div class="col-12 col-md-3">
         <div class="dasm-panel">
-          <div class="dasm-stat-label q-mb-sm">Instances</div>
-          <q-input v-model="model.name" label="Name" dense outlined class="q-mb-sm" />
-          <q-input v-model.number="model.namespaces" type="number" min="1" label="Namespaces" dense outlined class="q-mb-sm" />
-          <template v-if="!isPressure">
-            <q-input v-model.number="model.routesPerNamespace" type="number" min="1" label="Routes per NS" dense outlined class="q-mb-sm" />
-            <q-input v-model.number="model.servicesPerNamespace" type="number" min="1" label="Services per NS" dense outlined class="q-mb-sm" />
-            <q-input v-model.number="model.replicasPerService" type="number" min="1" label="Pods per service" dense outlined class="q-mb-sm" />
-            <q-select
-              v-model="model.routeToService"
-              :options="relOptions"
-              label="Route → Service"
-              dense
-              outlined
-              emit-value
-              map-options
-            />
-          </template>
-          <template v-else>
-            <div class="text-caption text-grey-7">
-              Apply path: <strong>kube-burner init</strong>. Missing CRDs are skipped with a warning unless marked required.
-              SubjectAccessReview / TokenReview are API review objects (often not etcd-resident) — those huge counts are usually request volume.
-            </div>
-            <div v-if="selectedObj" class="q-mt-md">
-              <div class="dasm-stat-label">Selected · {{ selectedObj.id }}</div>
-              <q-input v-model="selectedObj.apiVersion" dense outlined label="apiVersion" class="q-mb-xs" />
-              <q-input v-model="selectedObj.kind" dense outlined label="kind" class="q-mb-xs" />
-              <q-toggle v-model="selectedObj.required" label="Required (fail if CRD missing)" dense />
-              <q-input
-                v-if="selectedObj.custom"
-                v-model="selectedObj.inlineYAML"
-                type="textarea"
-                autogrow
-                dense
-                outlined
-                label="inline YAML (optional)"
-                class="q-mt-xs"
-              />
-              <q-btn flat dense color="negative" label="Remove" v-if="selectedObj.custom" @click="removeSelected" />
-            </div>
-          </template>
+          <div class="dasm-stat-label q-mb-sm">Density mix</div>
+          <q-input v-model.number="model.routesPerNamespace" type="number" min="1" label="Routes per NS" dense outlined class="q-mb-sm" />
+          <q-input v-model.number="model.servicesPerNamespace" type="number" min="1" label="Services per NS" dense outlined class="q-mb-sm" />
+          <q-input v-model.number="model.replicasPerService" type="number" min="1" label="Pods per service" dense outlined class="q-mb-sm" />
+          <q-select
+            v-model="model.routeToService"
+            :options="relOptions"
+            label="Route → Service"
+            dense
+            outlined
+            emit-value
+            map-options
+          />
         </div>
       </div>
     </div>
@@ -589,12 +610,11 @@ onMounted(load)
 .object-kinds-panel {
   display: flex;
   flex-direction: column;
-  max-height: min(70vh, 640px);
 }
 .kind-scroll {
   overflow-y: auto;
-  min-height: 180px;
-  flex: 1;
+  min-height: 420px;
+  max-height: min(72vh, 760px);
   padding-right: 4px;
 }
 .kind-group__title {
@@ -602,13 +622,28 @@ onMounted(load)
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #5a6b78;
-  margin: 0.45rem 0 0.2rem;
+  margin: 0.55rem 0 0.25rem;
+}
+.kind-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0 0.4rem;
+}
+@media (min-width: 720px) {
+  .kind-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (min-width: 1600px) {
+  .kind-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
 }
 .kind-row {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.2rem 0.15rem;
+  padding: 0.28rem 0.2rem;
   border-radius: 8px;
   cursor: pointer;
 }
@@ -638,5 +673,15 @@ onMounted(load)
 .kind-row__n {
   width: 64px;
   flex: 0 0 64px;
+}
+.selected-kind {
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(18, 32, 44, 0.08);
+}
+@media (min-width: 1024px) {
+  .topo-sticky {
+    position: sticky;
+    top: 0.75rem;
+  }
 }
 </style>

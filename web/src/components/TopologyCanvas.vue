@@ -1,5 +1,5 @@
 <template>
-  <div class="topo-wrap">
+  <div class="topo-wrap" :class="{ compact }">
     <svg
       class="topo-svg"
       :viewBox="`0 0 ${vbW} ${vbH}`"
@@ -64,19 +64,24 @@ import { computed } from 'vue'
 const props = defineProps({
   model: { type: Object, required: true },
   selected: { type: String, default: '' },
+  compact: { type: Boolean, default: false },
 })
 const emit = defineEmits(['select', 'drop'])
 
-const vbW = 920
+const vbW = computed(() => (props.compact ? 640 : 920))
 const isPressure = computed(() => props.model.kind === 'OpenShiftObjectPressure')
+const pressureCols = computed(() => (props.compact ? 2 : 3))
 
 const inner = computed(() => {
   if (props.model.namespaces < 1) return []
   if (isPressure.value) {
     const objs = (props.model.objects || []).filter((o) => o.enabled)
+    const cols = pressureCols.value
+    const cellW = props.compact ? 280 : 270
+    const padX = props.compact ? 36 : 72
     return objs.map((o, i) => {
-      const col = i % 3
-      const row = Math.floor(i / 3)
+      const col = i % cols
+      const row = Math.floor(i / cols)
       const gvk = o.apiVersion || ''
       const extra = o.clusterScoped ? ' · cluster' : (o.custom ? ' · custom CRD' : '')
       return {
@@ -86,10 +91,10 @@ const inner = computed(() => {
         sub: (gvk || (o.custom ? 'custom GVK' : '')) + extra,
         cls: o.custom ? 'is-custom' : (o.clusterScoped ? 'is-authz' : 'is-pressure'),
         dim: false,
-        x: 72 + col * 270,
-        y: 100 + row * 90,
-        w: 250,
-        h: 72,
+        x: padX + col * cellW,
+        y: 88 + row * 86,
+        w: props.compact ? 260 : 250,
+        h: 68,
       }
     })
   }
@@ -130,10 +135,12 @@ const inner = computed(() => {
   ]
 })
 
-const pressureRows = computed(() => Math.max(1, Math.ceil(((props.model.objects || []).filter((o) => o.enabled).length) / 3)))
-const vbH = computed(() => (isPressure.value ? Math.max(420, 130 + pressureRows.value * 90) : 420))
-const svgH = computed(() => Math.min(760, Math.max(420, vbH.value * 0.58)))
-const ns = computed(() => ({ x: 28, y: 28, w: 864, h: vbH.value - 56 }))
+const pressureRows = computed(() =>
+  Math.max(1, Math.ceil(((props.model.objects || []).filter((o) => o.enabled).length) / pressureCols.value)),
+)
+const vbH = computed(() => (isPressure.value ? Math.max(props.compact ? 320 : 420, 116 + pressureRows.value * 86) : 420))
+const svgH = computed(() => Math.min(props.compact ? 640 : 760, Math.max(props.compact ? 280 : 420, vbH.value * (props.compact ? 0.72 : 0.58))))
+const ns = computed(() => ({ x: 20, y: 20, w: vbW.value - 40, h: vbH.value - 40 }))
 const nsSubtitle = computed(() =>
   isPressure.value
     ? 'kube-burner jobIterations · object-pressure init'
@@ -181,10 +188,16 @@ function onDrop(ev) {
   overflow: auto;
   max-height: min(76vh, 760px);
 }
+.topo-wrap.compact {
+  max-height: min(72vh, 640px);
+}
 .topo-svg {
   width: 100%;
   min-height: 420px;
   display: block;
+}
+.topo-wrap.compact .topo-svg {
+  min-height: 280px;
 }
 .box-ns {
   fill: #e8f4f1;
