@@ -218,3 +218,30 @@ func TestCleanup(t *testing.T) {
 		t.Fatalf("still have %+v", snap)
 	}
 }
+
+type reapStub struct {
+	*kube.Fake
+	calls int
+}
+
+func (r *reapStub) ReapLabeled(ctx context.Context, runID string, dryRun bool, log func(string)) (int, error) {
+	r.calls++
+	if log != nil {
+		log("orphan reap stub")
+	}
+	return 4, nil
+}
+
+func TestCleanupReapsOrphansWhenNamespacesGone(t *testing.T) {
+	stub := &reapStub{Fake: kube.NewFake()}
+	res, err := Cleanup(context.Background(), CleanupOptions{Cluster: stub, RunID: "", Wait: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stub.calls != 1 {
+		t.Fatalf("reap calls %d", stub.calls)
+	}
+	if res.Orphans != 4 {
+		t.Fatalf("orphans %d", res.Orphans)
+	}
+}

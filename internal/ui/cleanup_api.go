@@ -95,6 +95,10 @@ func (s *Server) cleanupCheck(w http.ResponseWriter, r *http.Request) {
 			sink.appendLog("info", "STATE", 0, fmt.Sprintf(
 				"template %s has no live NS on %s — cluster still has %d managed NS under other run(s)/templates",
 				t.Template, cluster, status.ManagedTotal))
+		} else if o := status.Orphans; o != nil && (o.Pods > 0 || o.Deployments > 0 || o.Services > 0 || o.Routes > 0) {
+			sink.appendLog("warn", "STATE", 0, fmt.Sprintf(
+				"template %s has 0 NS on %s but labeled orphans remain · pods=%d deploy=%d svc=%d route=%d",
+				t.Template, cluster, o.Pods, o.Deployments, o.Services, o.Routes))
 		} else {
 			sink.appendLog("info", "STATE", 0, fmt.Sprintf("template %s clean on %s (no managed NS on cluster)", t.Template, cluster))
 		}
@@ -109,6 +113,7 @@ func (s *Server) cleanupCheck(w http.ResponseWriter, r *http.Request) {
 		"template":     status.Template,
 		"liveRuns":     status.LiveRuns,
 		"managedTotal": status.ManagedTotal,
+		"orphans":      status.Orphans,
 		"cluster":      cluster,
 		"cleaning":     s.isCleanupBusy(),
 		"run":          sink.snapshotSlim(),
@@ -121,6 +126,7 @@ type cleanupStatusPayload struct {
 	Template     *deployStatus
 	LiveRuns     []liveRunRow
 	ManagedTotal int
+	Orphans      *objectCounts
 }
 
 func (s *Server) cleanupStatus(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +146,7 @@ func (s *Server) cleanupStatus(w http.ResponseWriter, r *http.Request) {
 		"template":     status.Template,
 		"liveRuns":     status.LiveRuns,
 		"managedTotal": status.ManagedTotal,
+		"orphans":      status.Orphans,
 		"cluster":      s.currentCluster().Name,
 		"cleaning":     s.isCleanupBusy(),
 		"stream":       eventsPath,
@@ -176,6 +183,17 @@ func (s *Server) computeCleanupStatus(ctx context.Context, template string) (*cl
 	}
 
 	out := &cleanupStatusPayload{ManagedTotal: len(metas)}
+	if snap, err := s.listManagedSnap(ctx); err == nil {
+		out.Orphans = &objectCounts{
+			Namespaces:  snap.Namespaces,
+			Routes:      snap.Routes,
+			Services:    snap.Services,
+			Deployments: snap.Deployments,
+			Pods:        snap.Pods,
+			ReadyPods:   snap.ReadyPods,
+			PodPhases:   snap.PodPhases,
+		}
+	}
 
 	if template != "" {
 		st := &deployStatus{Template: template, Label: "cleaned", Deployed: false, Cluster: cluster}
@@ -228,6 +246,11 @@ func (s *Server) computeCleanupStatus(ctx context.Context, template string) (*cl
 			st.Label = "online"
 		} else {
 			st.Label = "cleaned"
+			if o := out.Orphans; o != nil && (o.Pods > 0 || o.Deployments > 0 || o.Services > 0 || o.Routes > 0) {
+				st.Label = "orphans"
+				st.Objects = o
+				st.Count = o.Pods
+			}
 		}
 		out.Template = st
 	}
@@ -312,6 +335,14 @@ func (s *Server) managedMetas(ctx context.Context) ([]nsMeta, string, error) {
 	s.indexAt, s.indexCluster, s.indexMetas, s.indexErr = time.Now(), cluster, metas, nil
 	s.indexMu.Unlock()
 	return metas, cluster, nil
+}
+
+func (s *Server) listManagedSnap(ctx context.Context) (kube.Snapshot, error) {
+	cl, err := s.liveClient(20, 40)
+	if err != nil {
+		return kube.Snapshot{}, err
+	}
+	return cl.ListManaged(ctx, "")
 }
 
 func runIDFromNS(name string) string {

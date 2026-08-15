@@ -23,7 +23,7 @@ var cascadeModel = map[string]any{
 		{"id": "leftover", "name": "Leftover RSS", "see": "workload deleted; API RSS still fat until static-pod restart"},
 	},
 	"lab": "maxPods on workers (this cluster typically 1000) · host prefix /22 so IPs are not the cliff",
-	"rss": "Go kube-apiserver RSS is a ratchet. Deletes free watch-cache occupancy, not OS working set.",
+	"rss": "Working set (RSS) is the RAM kube-apiserver is sitting on. Watch-cache grows it; DELETE does not give it back to the node. Cascade is live per sample: idle / api_flex / etcd_flex / collapse / leftover.",
 }
 
 type etcdJob struct {

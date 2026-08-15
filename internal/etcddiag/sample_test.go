@@ -23,11 +23,28 @@ func TestClassifyLeftoverAfterCleanup(t *testing.T) {
 	}
 }
 
+func TestClassifyLeftoverGhostPodsAfterForceFinalize(t *testing.T) {
+	snap := &Snapshot{
+		APIRSSMi:         10162,
+		BaselineAPIRSSMi: 7846,
+		WorkloadPods:     909,
+		WorkloadNS:       0,
+		MastersReady:     3, MastersTotal: 3,
+		EtcdReady: 3, EtcdTotal: 3,
+		APIReady: 3, APITotal: 3,
+	}
+	Classify(snap)
+	if snap.Cascade != StageLeftover {
+		t.Fatalf("got %s want leftover (NS gone, RSS still fat)", snap.Cascade)
+	}
+}
+
 func TestClassifyAPIFlexBeforeEtcd(t *testing.T) {
 	snap := &Snapshot{
 		APIRSSMi:         12000,
 		BaselineAPIRSSMi: 7000,
 		WorkloadPods:     4000,
+		WorkloadNS:       187,
 		MastersReady:     3, MastersTotal: 3,
 		EtcdReady: 3, EtcdTotal: 3,
 		APIReady: 3, APITotal: 3,

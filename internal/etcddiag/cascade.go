@@ -67,7 +67,8 @@ func Classify(snap *Snapshot) {
 	masterDown := snap.MastersTotal > 0 && snap.MastersReady < snap.MastersTotal
 	quorum := snap.EtcdTotal >= 3 && snap.EtcdReady < (snap.EtcdTotal/2)+1
 	apiFat := snap.BaselineAPIRSSMi > 0 && snap.APIRSSMi > snap.BaselineAPIRSSMi*1.35 && snap.APIRSSMi-snap.BaselineAPIRSSMi > 800
-	empty := snap.WorkloadPods < 50 && snap.WorkloadNS < 20
+	// Labeled namespaces gone (including force-finalize). Ghost pods do not keep us in api_flex.
+	empty := snap.WorkloadNS < 20
 
 	switch {
 	case masterDown || quorum:

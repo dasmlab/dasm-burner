@@ -499,6 +499,10 @@ const deployLabel = computed(() => {
     }
     return `online on ${on} (${n} NS)`
   }
+  if (deploy.value.label === 'orphans') {
+    const o = deploy.value.objects || {}
+    return `orphans on ${on} (0 NS · ${o.pods ?? deploy.value.count ?? 0} pods still in API)`
+  }
   if (managedTotal.value > 0) {
     return `no NS for this template on ${on} · ${managedTotal.value} other managed NS live`
   }
@@ -513,6 +517,7 @@ const deployObjectsCaption = computed(() => {
 })
 const deployChipColor = computed(() => {
   if (deployOnline.value) return 'warning'
+  if (deploy.value?.label === 'orphans') return 'warning'
   if (deploy.value?.label === 'cleaned') return 'positive'
   return 'grey-6'
 })

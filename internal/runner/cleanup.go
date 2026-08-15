@@ -22,6 +22,7 @@ type CleanupResult struct {
 	RunID      string   `json:"runId"`
 	Namespaces []string `json:"namespaces"`
 	Remaining  []string `json:"remaining,omitempty"`
+	Orphans    int      `json:"orphans,omitempty"`
 }
 
 // CleanupWaitTimeout scales namespace termination wait for large OVN deletes.
@@ -61,46 +62,55 @@ func Cleanup(ctx context.Context, opts CleanupOptions) (*CleanupResult, error) {
 	for _, name := range names {
 		log("  · " + name)
 	}
-	if len(names) == 0 {
-		log("nothing to delete")
-		return res, nil
-	}
 	if opts.DryRun {
-		log("dry-run — skip delete")
-		return res, nil
-	}
-	for _, name := range names {
-		log("deleting " + name)
-		if err := opts.Cluster.DeleteNamespace(ctx, name); err != nil {
-			log("FAILED delete " + name + ": " + err.Error())
-			return res, fmt.Errorf("delete namespace %s: %w", name, err)
+		log("dry-run — skip namespace delete")
+	} else if len(names) == 0 {
+		log("no managed namespace objects — will still reap labeled orphans")
+	} else {
+		for _, name := range names {
+			log("deleting " + name)
+			if err := opts.Cluster.DeleteNamespace(ctx, name); err != nil {
+				log("FAILED delete " + name + ": " + err.Error())
+				return res, fmt.Errorf("delete namespace %s: %w", name, err)
+			}
+		}
+		if opts.Wait {
+			timeout := opts.WaitTimeout
+			if timeout <= 0 {
+				timeout = CleanupWaitTimeout(len(names))
+			}
+			log(fmt.Sprintf("waiting up to %s for namespaces to terminate (%d targeted)", timeout, len(names)))
+			deadline := time.Now().Add(timeout)
+			for time.Now().Before(deadline) {
+				left, err := opts.Cluster.ListManagedNamespaces(ctx, opts.RunID)
+				if err != nil {
+					return res, err
+				}
+				res.Remaining = left
+				if len(left) == 0 {
+					log("all targeted namespaces gone")
+					break
+				}
+				log(fmt.Sprintf("still terminating: %d left · %s remaining", len(left), time.Until(deadline).Round(time.Second)))
+				if err := sleep(ctx, 5*time.Second); err != nil {
+					return res, err
+				}
+			}
+			if len(res.Remaining) > 0 {
+				log(fmt.Sprintf("timed out with %d remaining", len(res.Remaining)))
+				return res, fmt.Errorf("timed out waiting for %d namespace(s) to terminate", len(res.Remaining))
+			}
+		} else {
+			log("delete issued (not waiting for termination)")
 		}
 	}
-	if !opts.Wait {
-		log("delete issued (not waiting for termination)")
-		return res, nil
-	}
-	timeout := opts.WaitTimeout
-	if timeout <= 0 {
-		timeout = CleanupWaitTimeout(len(names))
-	}
-	log(fmt.Sprintf("waiting up to %s for namespaces to terminate (%d targeted)", timeout, len(names)))
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		left, err := opts.Cluster.ListManagedNamespaces(ctx, opts.RunID)
+
+	if reaper, ok := opts.Cluster.(kube.ManagedReaper); ok {
+		n, err := reaper.ReapLabeled(ctx, opts.RunID, opts.DryRun, log)
+		res.Orphans = n
 		if err != nil {
 			return res, err
 		}
-		res.Remaining = left
-		if len(left) == 0 {
-			log("all targeted namespaces gone")
-			return res, nil
-		}
-		log(fmt.Sprintf("still terminating: %d left · %s remaining", len(left), time.Until(deadline).Round(time.Second)))
-		if err := sleep(ctx, 5*time.Second); err != nil {
-			return res, err
-		}
 	}
-	log(fmt.Sprintf("timed out with %d remaining", len(res.Remaining)))
-	return res, fmt.Errorf("timed out waiting for %d namespace(s) to terminate", len(res.Remaining))
+	return res, nil
 }

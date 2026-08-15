@@ -85,40 +85,52 @@
             />
           </div>
 
-          <div class="dasm-stat-label q-mb-xs">Pieces</div>
-          <div class="row q-gutter-xs q-mb-md">
-            <q-chip
-              v-for="p in selected.pieces || []"
-              :key="p"
-              square
-              clickable
-              color="primary"
-              text-color="white"
-              :to="{ name: 'source-map' }"
-            >{{ p }}</q-chip>
-          </div>
+          <q-expansion-item class="inv-exp" dense switch-toggle-side expand-separator label="Pieces" default-opened>
+            <div class="row q-gutter-xs q-mb-sm q-mt-xs">
+              <q-chip
+                v-for="p in selected.pieces || []"
+                :key="p"
+                square
+                clickable
+                color="primary"
+                text-color="white"
+                :to="{ name: 'source-map' }"
+              >{{ p }}</q-chip>
+            </div>
+          </q-expansion-item>
 
-          <div class="dasm-stat-label q-mb-xs">Hypothesis</div>
-          <p>{{ selected.hypothesis }}</p>
+          <q-expansion-item class="inv-exp" dense switch-toggle-side expand-separator label="Hypothesis" default-opened>
+            <p class="q-mt-sm">{{ selected.hypothesis }}</p>
+            <p v-if="selected.metric"><code>{{ selected.metric }}</code></p>
+            <p>
+              Protocol:
+              <router-link :to="{ name: 'isolation' }">{{ selected.protocol || 'isolated-wave' }}</router-link>
+            </p>
+          </q-expansion-item>
 
-          <div class="dasm-stat-label q-mb-xs">Metric</div>
-          <p><code>{{ selected.metric }}</code></p>
-
-          <div class="dasm-stat-label q-mb-xs">Protocol</div>
-          <p>
-            <router-link :to="{ name: 'isolation' }">{{ selected.protocol || 'isolated-wave' }}</router-link>
-          </p>
-
-          <div v-if="selected.testPlan?.length" class="q-mb-md">
-            <div class="dasm-stat-label q-mb-xs">Test plan</div>
-            <ol class="detail-list">
+          <q-expansion-item
+            v-if="selected.testPlan?.length"
+            class="inv-exp"
+            dense
+            switch-toggle-side
+            expand-separator
+            label="Test plan"
+          >
+            <ol class="detail-list q-mt-sm">
               <li v-for="(step, i) in selected.testPlan" :key="i">{{ step }}</li>
             </ol>
-          </div>
+          </q-expansion-item>
 
-          <div v-if="selected.sourceFiles?.length" class="q-mb-md">
-            <div class="dasm-stat-label q-mb-xs">Source pins</div>
-            <ul class="detail-list">
+          <q-expansion-item
+            v-if="selected.sourceFiles?.length"
+            class="inv-exp"
+            dense
+            switch-toggle-side
+            expand-separator
+            label="Source pins"
+            default-opened
+          >
+            <ul class="detail-list q-mt-sm">
               <li v-for="f in selected.sourceFiles" :key="f.path">
                 <a :href="f.url" target="_blank" rel="noopener"><code>{{ f.path }}</code></a>
                 <span v-if="f.lines"> :{{ f.lines }}</span>
@@ -128,24 +140,39 @@
                 </span>
               </li>
             </ul>
-          </div>
+          </q-expansion-item>
 
-          <div v-if="selected.possibleFix" class="fix-box q-mb-md">
-            <div class="text-weight-medium">Possible code fix / experiment</div>
-            <p>{{ selected.possibleFix.title }}</p>
-            <p class="text-caption"><strong>Metric:</strong> {{ selected.possibleFix.metric }}</p>
-            <p class="text-caption">{{ selected.possibleFix.action }}</p>
-            <p class="text-caption text-grey-7">
-              A later fork patch is still this investigation — same id, status → experiment / patched, new evidence.
-            </p>
-          </div>
+          <q-expansion-item
+            v-if="selected.possibleFix"
+            class="inv-exp"
+            dense
+            switch-toggle-side
+            expand-separator
+            label="Possible code fix / experiment"
+            default-opened
+          >
+            <div class="fix-box q-mt-sm q-mb-sm">
+              <p>{{ selected.possibleFix.title }}</p>
+              <p class="text-caption"><strong>Metric:</strong> {{ selected.possibleFix.metric }}</p>
+              <p class="text-caption">{{ selected.possibleFix.action }}</p>
+              <p class="text-caption text-grey-7 q-mb-none">
+                A later fork patch is still this investigation — same id, status → experiment / patched, new evidence.
+              </p>
+            </div>
+          </q-expansion-item>
 
-          <div v-if="selected.notes" class="q-mb-md">
-            <div class="dasm-stat-label q-mb-xs">Notes</div>
-            <p>{{ selected.notes }}</p>
-          </div>
+          <q-expansion-item
+            v-if="selected.notes"
+            class="inv-exp"
+            dense
+            switch-toggle-side
+            expand-separator
+            label="Notes"
+          >
+            <p class="q-mt-sm">{{ selected.notes }}</p>
+          </q-expansion-item>
 
-          <div class="dasm-stat-label q-mb-xs">Evidence</div>
+          <q-expansion-item class="inv-exp" dense switch-toggle-side expand-separator label="Evidence" default-opened>
           <div v-if="!(selected.evidence || []).length" class="text-caption text-grey-7 q-mb-md">
             None yet. Isolated-wave samples and leftover RSS belong here.
           </div>
@@ -179,6 +206,7 @@
               @click="appendEvidence"
             />
           </div>
+          </q-expansion-item>
         </div>
       </div>
     </div>
@@ -407,6 +435,14 @@ onMounted(async () => {
   font-size: 1.25rem;
   margin: 0 0 0.35rem;
   line-height: 1.3;
+}
+.inv-exp :deep(.q-item) { padding-left: 0; min-height: 2.1rem; }
+.inv-exp :deep(.q-item__label) {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f7f8d;
+  font-weight: 600;
 }
 .detail-list { margin: 0; padding-left: 1.2rem; line-height: 1.55; }
 .fix-box {

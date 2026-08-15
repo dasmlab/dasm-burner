@@ -13,36 +13,34 @@
     <div class="dasm-panel q-mb-md">
       <div class="dasm-stat-label q-mb-sm">Closed loop</div>
       <p class="text-caption text-grey-7 q-mb-sm">
-        D3 SVG from the protocol in-repo. One wave, then recover, then the next.
-        Dumping 14 waves and list-deleting everything cannot tell you which batch created the RSS.
+        One wave, then recover, then the next. Dumping 14 waves and list-deleting everything cannot tell you which batch created the RSS.
       </p>
       <IsolationLoopSvg :steps="iso.steps" :causality="iso.causality" />
     </div>
 
-    <div class="dasm-panel q-mb-md">
-      <div class="dasm-stat-label q-mb-sm">What we are looking for</div>
-      <ol class="detail-list">
+    <q-expansion-item
+      class="dasm-panel q-mb-md iso-exp"
+      dense
+      switch-toggle-side
+      expand-separator
+      label="What we are looking for"
+      default-opened
+    >
+      <ol class="detail-list q-mt-sm">
         <li v-for="s in iso.steps" :key="s.id">
           <strong>{{ s.title }}.</strong> {{ s.see }}
         </li>
       </ol>
       <p class="text-caption q-mt-sm">{{ iso.breakpointHint }}</p>
-    </div>
+    </q-expansion-item>
 
-    <div class="dasm-panel q-mb-md">
-      <div class="dasm-stat-label q-mb-sm">Causality chain</div>
-      <div class="row q-gutter-sm">
-        <q-chip v-for="(c, i) in iso.causality" :key="c" square color="primary" text-color="white">
-          {{ i + 1 }}. {{ c }}
-        </q-chip>
-      </div>
-      <p class="text-caption text-grey-7 q-mt-sm">
-        Recovery (DELETE + finalizers + watch disconnect) is a second mutating load. It belongs in the same loop.
-      </p>
-    </div>
-
-    <div class="dasm-panel q-mb-md">
-      <div class="dasm-stat-label q-mb-sm">Possible code fix — watch cache does not shrink on DELETE</div>
+    <q-expansion-item
+      class="dasm-panel q-mb-md iso-exp"
+      dense
+      switch-toggle-side
+      expand-separator
+      label="Possible code fix — watch cache does not shrink on DELETE"
+    >
       <p>
         In Kubernetes v1.34.6 (this cluster),
         <code>watchCache.Delete</code> does <em>not</em> drop the event ring.
@@ -83,7 +81,7 @@ func (w *watchCache) isCacheFullLocked() bool {
         and events are older than <code>eventFreshDuration</code>, without requiring full.
         Drive status and evidence from the Investigations panel; do not lose it in chat.
       </p>
-    </div>
+    </q-expansion-item>
   </q-page>
 </template>
 
@@ -107,6 +105,14 @@ onMounted(async () => {
 
 <style scoped>
 .detail-list { margin: 0; padding-left: 1.2rem; line-height: 1.55; }
+.iso-exp :deep(.q-item) { padding-left: 0; min-height: 2.2rem; }
+.iso-exp :deep(.q-item__label) {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f7f8d;
+  font-weight: 600;
+}
 .code-block {
   margin: 0.75rem 0;
   padding: 0.85rem 1rem;

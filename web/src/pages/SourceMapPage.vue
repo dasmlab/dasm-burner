@@ -14,51 +14,53 @@
 
     <div v-if="error" class="dasm-panel q-mb-md text-negative">{{ error }}</div>
 
-    <div class="dasm-panel q-mb-md">
-      <div class="dasm-stat-label q-mb-sm">Relations</div>
-      <SourceMapGraph
-        :cluster="cluster"
-        :openshift="mmap.openshift"
-        :pieces="mmap.pieces || []"
-        @select="selected = $event"
-      />
+    <div class="src-layout">
+      <div class="dasm-panel">
+        <div class="dasm-stat-label q-mb-sm">Pieces</div>
+        <SourceMapGraph
+          :cluster="cluster"
+          :openshift="mmap.openshift"
+          :pieces="mmap.pieces || []"
+          :selected-id="selected?.id"
+          @select="selected = $event"
+        />
+      </div>
+
+      <div class="dasm-panel">
+        <div class="dasm-stat-label q-mb-sm">Pins</div>
+        <q-markup-table flat dense wrap-cells class="pin-table">
+          <thead>
+            <tr>
+              <th class="text-left">Piece</th>
+              <th class="text-left">Clone</th>
+              <th class="text-left">Branch</th>
+              <th class="text-left">Payload SHA</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="p in mmap.pieces"
+              :key="p.id"
+              class="piece-row"
+              :class="{ 'is-sel': selected?.id === p.id }"
+              @click="selected = p"
+            >
+              <td>
+                <div class="text-weight-medium">{{ p.name }}</div>
+              </td>
+              <td><a :href="p.repo" target="_blank" rel="noopener">{{ shortRepo(p.clone) }}</a></td>
+              <td><code>{{ p.branch }}</code></td>
+              <td>
+                <a :href="p.commitUrl" target="_blank" rel="noopener"><code>{{ short(p.payloadSha) }}</code></a>
+                <div v-if="p.upstreamTag" class="text-caption">upstream {{ p.upstreamTag }}</div>
+              </td>
+            </tr>
+          </tbody>
+        </q-markup-table>
+      </div>
     </div>
 
-    <div class="dasm-panel q-mb-md">
-      <div class="dasm-stat-label q-mb-sm">Pins</div>
-      <q-markup-table flat dense wrap-cells>
-        <thead>
-          <tr>
-            <th class="text-left">Piece</th>
-            <th class="text-left">Clone this</th>
-            <th class="text-left">Branch</th>
-            <th class="text-left">Payload SHA</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="p in mmap.pieces"
-            :key="p.id"
-            class="piece-row"
-            :class="{ 'is-sel': selected?.id === p.id }"
-            @click="selected = p"
-          >
-            <td>
-              <div class="text-weight-medium">{{ p.name }}</div>
-              <div class="text-caption text-grey-7">{{ p.role }}</div>
-            </td>
-            <td><a :href="p.repo" target="_blank" rel="noopener">{{ p.clone }}</a></td>
-            <td><code>{{ p.branch }}</code></td>
-            <td>
-              <a :href="p.commitUrl" target="_blank" rel="noopener"><code>{{ short(p.payloadSha) }}</code></a>
-              <div v-if="p.upstreamTag" class="text-caption">upstream {{ p.upstreamTag }}</div>
-            </td>
-          </tr>
-        </tbody>
-      </q-markup-table>
-    </div>
-
-    <div v-if="selected" class="dasm-panel q-mb-md">
+    <div v-if="selected" class="dasm-panel q-mt-md">
       <div class="dasm-stat-label q-mb-sm">{{ selected.name }}</div>
       <p>{{ selected.role }}</p>
       <ul class="detail-list" v-if="selected.files?.length">
@@ -104,6 +106,10 @@ const error = ref('')
 function short(sha) {
   return sha ? sha.slice(0, 12) : '—'
 }
+function shortRepo(url) {
+  if (!url) return '—'
+  return url.replace(/^https:\/\/github.com\//, '').replace(/\.git$/, '')
+}
 
 onMounted(async () => {
   try {
@@ -127,4 +133,15 @@ onMounted(async () => {
   padding: 0.9rem 1rem;
   background: #f6fafc;
 }
+.src-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 0.85rem;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .src-layout { grid-template-columns: 1fr; }
+}
+.pin-table { width: 100%; }
+.pin-table :deep(th), .pin-table :deep(td) { vertical-align: top; }
 </style>
