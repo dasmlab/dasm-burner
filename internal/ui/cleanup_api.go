@@ -16,15 +16,15 @@ import (
 )
 
 type deployStatus struct {
-	Template     string         `json:"template,omitempty"`
-	RunID        string         `json:"runId,omitempty"`
-	Prefix       string         `json:"prefix,omitempty"`
-	Deployed     bool           `json:"deployed"`
-	Namespaces   []string       `json:"namespaces,omitempty"`
-	Count        int            `json:"count"`
-	Label        string         `json:"label"` // online | cleaned | unknown
-	Cluster      string         `json:"cluster,omitempty"`
-	Objects      *objectCounts  `json:"objects,omitempty"`
+	Template   string        `json:"template,omitempty"`
+	RunID      string        `json:"runId,omitempty"`
+	Prefix     string        `json:"prefix,omitempty"`
+	Deployed   bool          `json:"deployed"`
+	Namespaces []string      `json:"namespaces,omitempty"`
+	Count      int           `json:"count"`
+	Label      string        `json:"label"` // online | cleaned | unknown
+	Cluster    string        `json:"cluster,omitempty"`
+	Objects    *objectCounts `json:"objects,omitempty"`
 }
 
 type objectCounts struct {
@@ -370,12 +370,11 @@ func (s *Server) doCleanup(w http.ResponseWriter, r *http.Request) {
 
 	m := s.execMgr()
 	m.mu.Lock()
-	if m.cur != nil && m.cur.Status == "running" {
-		m.mu.Unlock()
-		writeError(w, http.StatusConflict, fmt.Errorf("cannot cleanup while a test run is in progress"))
-		return
-	}
+	cur := m.cur
 	m.mu.Unlock()
+	if cur != nil && cur.Status == "running" {
+		cur.abortForCleanup()
+	}
 
 	s.mu.Lock()
 	if s.cleanupBusy {

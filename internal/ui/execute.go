@@ -489,15 +489,15 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 			run.appendLog("info", "OPEN", 0, fmt.Sprintf("health snapshot nodes Ready %d/%d OVN %d/%d restarts=%d",
 				h.NodesReady, h.NodesReady+h.NodesNotReady, h.OVNReady, h.OVNPods, h.OVNRestarts))
 		}
-	if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil && enableOVN {
-		run.appendLog("info", "OVNDIAG", 0, "baseline sample queued on OVN worker (not on the web request path)")
-		s.performOVNJob(ovnJob{kind: "baseline", log: run})
-		run.appendLog("info", "OVNDIAG", 0, "per-batch samples go through the same single-slot worker; no 45s watch loop")
-	}
-	if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil && enableEtcd {
-		run.appendLog("info", "ETCDDIAG", 0, "baseline sample on ETCD worker (masters · etcd · kube-apiserver)")
-		s.performEtcdJob(etcdJob{kind: "baseline", log: run})
-	}
+		if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil && enableOVN {
+			run.appendLog("info", "OVNDIAG", 0, "baseline sample queued on OVN worker (not on the web request path)")
+			s.performOVNJob(ovnJob{kind: "baseline", log: run})
+			run.appendLog("info", "OVNDIAG", 0, "per-batch samples go through the same single-slot worker; no 45s watch loop")
+		}
+		if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil && enableEtcd {
+			run.appendLog("info", "ETCDDIAG", 0, "baseline sample on ETCD worker (masters · etcd · kube-apiserver)")
+			s.performEtcdJob(etcdJob{kind: "baseline", log: run})
+		}
 	}
 
 	if !dryRun && !cfg.IsObjectPressure() {
@@ -859,6 +859,31 @@ func (r *execRun) setStep(id string, st stepStatus, msg string) {
 	if cb != nil {
 		cb()
 	}
+}
+
+func (r *execRun) abortForCleanup() {
+	if r == nil {
+		return
+	}
+	if r.cancel != nil {
+		r.cancel()
+	}
+	r.mu.Lock()
+	if r.Status == "running" {
+		r.Status = "aborted"
+		r.Error = "stopped so cleanup can run"
+		now := time.Now()
+		r.Finished = &now
+		for i := range r.Steps {
+			if r.Steps[i].Status == stepRunning {
+				r.Steps[i].Status = stepFailed
+				r.Steps[i].Message = "stopped for cleanup"
+				r.Steps[i].Finished = &now
+			}
+		}
+	}
+	r.mu.Unlock()
+	r.appendLog("warn", "CANCEL", 0, "stopped so cleanup can run")
 }
 
 func (r *execRun) fail(stepID, msg string) {

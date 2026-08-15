@@ -41,7 +41,7 @@
             outlined
             emit-value
             map-options
-            :disable="running"
+            :disable="locks.template"
             @update:model-value="onTemplate"
           />
           <div class="meta-static q-mt-sm">
@@ -67,7 +67,7 @@
               icon="sync"
               label="Refresh / check state"
               :loading="checking"
-              :disable="running || cleaning"
+              :disable="locks.refresh"
               @click="checkState('manual refresh')"
             />
             <q-btn
@@ -92,7 +92,7 @@
             icon="play_arrow"
             label="Execute test"
             :loading="starting"
-            :disable="!templateName || running || !canAdmin"
+            :disable="!templateName || locks.execute"
             @click="start"
           />
           <q-btn
@@ -101,7 +101,7 @@
             class="full-width q-mt-sm"
             icon="stop"
             label="Cancel"
-            :disable="!running || !canAdmin"
+            :disable="locks.cancel"
             @click="cancel"
           />
         </div>
@@ -156,7 +156,7 @@
               icon="delete_sweep"
               label="Clean last run"
               :loading="cleaning"
-              :disable="running || !templateName || !canAdmin"
+              :disable="!templateName || locks.cleanup"
               @click="doCleanup('last')"
             />
             <q-btn
@@ -167,7 +167,7 @@
               icon="folder_delete"
               label="Clean this template"
               :loading="cleaning"
-              :disable="running || !templateName || !canAdmin"
+              :disable="!templateName || locks.cleanup"
               @click="doCleanup('template')"
             />
             <q-btn
@@ -178,7 +178,7 @@
               icon="cleaning_services"
               label="Clean all kb- runs"
               :loading="cleaning"
-              :disable="running || !canAdmin"
+              :disable="locks.cleanup"
               @click="doCleanup('all')"
             />
           </div>
@@ -225,7 +225,7 @@
               min="110"
               max="2000"
               class="q-mb-sm"
-              :disable="running || cleaning || settingMaxPods || !canAdmin"
+              :disable="locks.maxPodsWrite || settingMaxPods"
             />
             <q-btn
               outline
@@ -235,7 +235,7 @@
               icon="refresh"
               label="Get current"
               :loading="readingMaxPods"
-              :disable="running || cleaning || settingMaxPods || !canAdmin"
+              :disable="locks.maxPodsRead || settingMaxPods"
               @click="refreshMaxPods(true)"
             />
             <q-btn
@@ -246,7 +246,7 @@
               icon="memory"
               label="Set worker maxPods"
               :loading="settingMaxPods"
-              :disable="running || cleaning || !canAdmin"
+              :disable="locks.maxPodsWrite"
             />
           </div>
         </q-expansion-item>
@@ -388,6 +388,7 @@ import api from 'src/services/api'
 import { useAuth } from 'src/services/auth'
 import { useCluster } from 'src/services/cluster'
 import { openLiveStream } from 'src/services/events'
+import { executeControlLocks } from 'src/utils/executeLocks'
 
 const auth = useAuth()
 const canAdmin = computed(() => auth.isAdmin.value)
@@ -463,6 +464,11 @@ const steps = computed(() => run.value?.steps || [])
 const logs = computed(() => run.value?.logs || [])
 const runStatus = computed(() => run.value?.status || 'idle')
 const running = computed(() => runStatus.value === 'running')
+const locks = computed(() => executeControlLocks({
+  status: runStatus.value,
+  canAdmin: canAdmin.value,
+  cleaning: cleaning.value,
+}))
 const interrupted = computed(() => runStatus.value === 'interrupted')
 const runPrefix = computed(() => run.value?.prefix || '')
 const runPattern = computed(() => run.value?.namePattern || '')
