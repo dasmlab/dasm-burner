@@ -101,6 +101,10 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/etcddiag/sample", s.admin(s.etcddiagSample))
 	s.Mux.Handle("/api/v1/etcddiag/history", s.guest(s.etcddiagHistoryAPI))
 	s.Mux.Handle("/api/v1/etcddiag/history/", s.guest(s.etcddiagHistoryAPI))
+	s.Mux.Handle("/api/v1/isolation", s.guest(s.isolationAPI))
+	s.Mux.Handle("/api/v1/sourcemap", s.guest(s.sourceMapAPI))
+	s.Mux.Handle("/api/v1/investigations", s.allowGuest(s.investigationsAPI, http.MethodGet))
+	s.Mux.Handle("/api/v1/investigations/", s.allowGuest(s.investigationByID, http.MethodGet))
 	s.Mux.HandleFunc("/", s.spa)
 	s.bus = NewEventBus()
 	s.ovnQ = make(chan ovnJob, 4)
@@ -211,10 +215,10 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"runId":     g.RunID,
+		"runId":      g.RunID,
 		"namespaces": len(names),
-		"sampledAt": time.Now(),
-		"note":      "counts are namespace-only; object tallies are not listed on the request path",
+		"sampledAt":  time.Now(),
+		"note":       "counts are namespace-only; object tallies are not listed on the request path",
 	})
 }
 

@@ -43,7 +43,7 @@ Phase 2 still owns apply. Phase 3 renders kube-burner YAML and shells out to the
 - `apply --measure` starts `kube-burner measure` (podLatency / serviceLatency) against labels `dasm-burner.dasmlab.org/run=<id>`, then `index` + `check-alerts` against OpenShift thanos-querier.
 - Collected JSON lands in `<out>/kube-burner/collected`. Alerts warn; they do not fail apply.
 
-How we use kube-burner’s config/go-templates vs what we still own: [docs/KUBE-BURNER.md](docs/KUBE-BURNER.md). UI SSO: [docs/KEYCLOAK_SETUP.md](docs/KEYCLOAK_SETUP.md).
+How we use kube-burner’s config/go-templates vs what we still own: [docs/KUBE-BURNER.md](docs/KUBE-BURNER.md). UI SSO: [docs/KEYCLOAK_SETUP.md](docs/KEYCLOAK_SETUP.md). Density protocol: [docs/WAVE-ISOLATION.md](docs/WAVE-ISOLATION.md). Control-plane pins: [docs/OCP-SOURCE-MAP.md](docs/OCP-SOURCE-MAP.md). Hypotheses we can re-run from the UI: [docs/INVESTIGATIONS.md](docs/INVESTIGATIONS.md).
 
 ## Phases
 

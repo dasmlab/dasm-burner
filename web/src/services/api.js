@@ -72,6 +72,18 @@ export const listEtcdDiagHistory = () =>
 export const getEtcdDiagSnapshot = (id) =>
   api.get(`/etcddiag/history/${encodeURIComponent(id)}`, { timeout: 60_000 }).then((r) => r.data)
 
+export const getIsolation = () => api.get('/isolation').then((r) => r.data)
+export const getSourceMap = () => api.get('/sourcemap').then((r) => r.data)
+export const getInvestigations = () => api.get('/investigations').then((r) => r.data)
+export const getInvestigation = (id) =>
+  api.get(`/investigations/${encodeURIComponent(id)}`).then((r) => r.data)
+export const createInvestigation = (body) =>
+  api.post('/investigations', body).then((r) => r.data)
+export const updateInvestigation = (id, body) =>
+  api.put(`/investigations/${encodeURIComponent(id)}`, body).then((r) => r.data)
+export const addInvestigationEvidence = (id, body) =>
+  api.post(`/investigations/${encodeURIComponent(id)}/evidence`, body).then((r) => r.data)
+
 export async function getAuthConfig() {
   const { data } = await api.get('/auth/config')
   return data

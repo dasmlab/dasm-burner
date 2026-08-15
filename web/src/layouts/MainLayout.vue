@@ -115,6 +115,28 @@
             <q-item-label caption>masters · members · pulse</q-item-label>
           </q-item-section>
         </q-item>
+        <q-item-label header class="nav-section-label">North star</q-item-label>
+        <q-item clickable v-ripple :to="{ name: 'isolation' }" active-class="text-primary bg-grey-2">
+          <q-item-section avatar><q-icon name="filter_alt" /></q-item-section>
+          <q-item-section>
+            <q-item-label>Isolated wave</q-item-label>
+            <q-item-label caption>one wave · recover · next</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item clickable v-ripple :to="{ name: 'source-map' }" active-class="text-primary bg-grey-2">
+          <q-item-section avatar><q-icon name="hub" /></q-item-section>
+          <q-item-section>
+            <q-item-label>Source map</q-item-label>
+            <q-item-label caption>kas · etcd · ovn · oauth</q-item-label>
+          </q-item-section>
+        </q-item>
+        <q-item clickable v-ripple :to="{ name: 'investigations' }" active-class="text-primary bg-grey-2">
+          <q-item-section avatar><q-icon name="science" /></q-item-section>
+          <q-item-section>
+            <q-item-label>Investigations</q-item-label>
+            <q-item-label caption>hypothesis · patch · evidence</q-item-label>
+          </q-item-section>
+        </q-item>
       </q-list>
     </q-drawer>
 

@@ -143,7 +143,7 @@ var RuleCatalog = map[string]RuleInfo{
 	"ETCD005": {ID: "ETCD005", Title: "kube-apiserver not Ready", About: "A static kube-apiserver pod on a master is not Ready."},
 	"ETCD006": {ID: "ETCD006", Title: "etcd quorum risk", About: "Fewer than majority of etcd members are Ready."},
 	"ETCD007": {ID: "ETCD007", Title: "kube-apiserver RSS vs baseline", About: "API working set grew under load. This is the first flex in the density cascade."},
-	"ETCD008": {ID: "ETCD008", Title: "Leftover API RSS after cleanup", About: "Workload objects are gone but kube-apiserver RSS did not return to baseline. Go heap/RSS is a ratchet until the static pod restarts."},
+	"ETCD008": {ID: "ETCD008", Title: "Leftover API RSS after cleanup", About: "Workload objects are gone but kube-apiserver RSS did not return to baseline. watch_cache.Delete still appends a Deleted event; resizeCacheLocked only shrinks when the ring is full. Go also will not return RSS to the OS until the static pod restarts."},
 	"ETCD009": {ID: "ETCD009", Title: "Cascade advanced", About: "Observed order: kube-apiserver flex → etcd flex → master/OVN collapse."},
 	"ETCD010": {ID: "ETCD010", Title: "kube-apiserver restarts vs baseline", About: "API static pod restarted since baseline — RSS may have reset then grown again."},
 }

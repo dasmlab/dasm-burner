@@ -9,6 +9,37 @@ import (
 	"time"
 )
 
+func TestIsolationAndSourceMap(t *testing.T) {
+	s := New("dev", t.TempDir(), "", "", nil, nil)
+	rec := httptest.NewRecorder()
+	s.Mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/isolation", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"Isolated Wave`) {
+		t.Fatalf("isolation %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.Mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/sourcemap", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"kube-apiserver"`) || !strings.Contains(rec.Body.String(), "watch_cache.go") {
+		t.Fatalf("sourcemap %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.Mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/investigations", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "watch-cache-shrink-without-full") {
+		t.Fatalf("investigations %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.Mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/investigations/watch-cache-shrink-without-full", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "resizeCacheLocked") {
+		t.Fatalf("investigation %d %s", rec.Code, rec.Body.String())
+	}
+	body := strings.NewReader(`{"status":"experiment","notes":"fork patch next"}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/investigations/watch-cache-shrink-without-full", body)
+	rec = httptest.NewRecorder()
+	s.Mux.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"experiment"`) {
+		t.Fatalf("put investigation %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	s := New("dev", t.TempDir(), "", "", nil, nil)
 	rec := httptest.NewRecorder()

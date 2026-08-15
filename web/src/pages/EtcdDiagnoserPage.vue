@@ -50,6 +50,13 @@
         </div>
       </div>
       <p class="text-caption q-mt-sm" v-if="snap?.cascadeWhy">{{ snap.cascadeWhy }}</p>
+      <p class="text-caption q-mt-sm">
+        North star is <router-link :to="{ name: 'isolation' }">Isolated wave mode</router-link>
+        · leftover RSS:
+        <router-link :to="{ name: 'investigations', params: { id: 'watch-cache-shrink-without-full' } }">Investigations</router-link>
+        ·
+        <router-link :to="{ name: 'source-map' }">watch_cache.go on the source map</router-link>.
+      </p>
     </div>
 
     <div v-if="chart.points.length" class="dasm-panel q-mb-md">
