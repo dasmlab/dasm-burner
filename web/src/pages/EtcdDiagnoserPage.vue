@@ -38,47 +38,16 @@
       </ol>
     </q-expansion-item>
 
-    <div v-if="chart.points.length" class="dasm-panel q-mb-md">
-      <div class="dasm-stat-label q-mb-xs">Working set vs burn pods</div>
-      <p class="text-caption q-mb-sm">
-        <strong>Working set / RSS</strong> is the RAM the process is actually sitting on right now
-        (<code>container_memory_working_set_bytes</code> via metrics.k8s.io) — not etcd DB size, not Go’s idea of “free.”
-        kube-apiserver allocates watch-cache under LIST/WATCH; Go keeps that heap. Deletes remove objects;
-        they do not give the pages back to the node. That is why the red line can stay high after the brown line drops.
-      </p>
-      <svg class="rss-chart" viewBox="0 0 640 220" preserveAspectRatio="xMidYMid meet">
-        <text x="8" y="16" fill="#6f7f8d" font-size="11">Mi (RSS)</text>
-        <line v-if="chart.baseY" x1="10" :y1="chart.baseY" x2="630" :y2="chart.baseY" stroke="#c0392b" stroke-width="1" stroke-dasharray="3 4" opacity="0.45" />
-        <polyline fill="none" stroke="#c0392b" stroke-width="2.4" :points="chart.api" />
-        <polyline fill="none" stroke="#2980b9" stroke-width="2" :points="chart.etcd" />
-        <polyline fill="none" stroke="#27ae60" stroke-width="2" :points="chart.ovn" />
-        <polyline fill="none" stroke="#8e6b3a" stroke-width="1.6" stroke-dasharray="4 3" :points="chart.pods" />
-      </svg>
-      <div class="row q-gutter-md text-caption">
-        <span><span class="swatch swatch-api" /> kube-apiserver RSS (the ratchet)</span>
-        <span><span class="swatch swatch-etcd" /> etcd RSS</span>
-        <span><span class="swatch swatch-ovn" /> ovnkube-controller RSS</span>
-        <span><span class="swatch swatch-pods" /> burn pods (scaled to the same height)</span>
-      </div>
-      <p class="text-caption text-grey-7 q-mt-xs">
-        {{ chart.first }} → {{ chart.last }} · {{ chart.points.length }} samples
-        <span v-if="snap?.baselineApiserverRssMi"> · baseline API {{ Math.round(snap.baselineApiserverRssMi) }} Mi (dashed red)</span>
-      </p>
-    </div>
-    <div v-else class="dasm-panel q-mb-md text-caption text-grey-7">
-      No timeseries yet. Capture baseline, then Sample now (or run Execute with ETCD samples on).
-    </div>
-
     <div class="dasm-panel q-mb-md">
       <div class="dasm-stat-label q-mb-sm">Cascade — live, not a poster</div>
       <p class="text-caption q-mb-sm">
-        Recomputed on every sample from Ready, MemoryPressure, RSS vs baseline, and whether burn namespaces are gone.
-        Current stage is filled. Collapse is red. Stages this series already visited stay tinted.
+        Read this first. Recomputed on every sample from Ready, MemoryPressure, RSS vs baseline, and whether burn namespaces are gone.
+        Current stage is filled. Collapse is red. Stages this series already visited stay tinted. Marks on the graph match these stages.
       </p>
       <div class="row q-col-gutter-sm">
-        <div v-for="st in stages" :key="st.id" class="col-12 col-sm">
+        <div v-for="(st, i) in stages" :key="st.id" class="col-12 col-sm">
           <div class="stage" :class="stageClass(st.id)">
-            <div class="text-weight-medium">{{ st.name }}</div>
+            <div class="text-weight-medium">S{{ i + 1 }} · {{ st.name }}</div>
             <div class="text-caption">{{ st.see }}</div>
           </div>
         </div>
@@ -93,6 +62,52 @@
         ·
         <router-link :to="{ name: 'source-map' }">watch_cache.go on the source map</router-link>.
       </p>
+    </div>
+
+    <div v-if="chart.points.length" class="dasm-panel q-mb-md">
+      <div class="dasm-stat-label q-mb-xs">Working set vs burn pods</div>
+      <p class="text-caption q-mb-sm">
+        <strong>Y</strong> is RAM the process is sitting on now (working set / RSS, Mi) — not etcd DB size.
+        <strong>X</strong> is sample time, first → last. Vertical marks are cascade stages (S1–S5).
+        The red line can stay high after the brown line drops: deletes do not give pages back to the node.
+      </p>
+      <svg class="rss-chart" :viewBox="`0 0 ${chart.vb.w} ${chart.vb.h}`" preserveAspectRatio="xMidYMid meet">
+        <text :x="14" :y="chart.plot.cy" fill="#6f7f8d" font-size="11" text-anchor="middle" :transform="`rotate(-90 14 ${chart.plot.cy})`">Working set (Mi RSS)</text>
+        <text :x="chart.vb.w - 10" :y="chart.plot.cy" fill="#8e6b3a" font-size="11" text-anchor="middle" :transform="`rotate(90 ${chart.vb.w - 10} ${chart.plot.cy})`">Burn pods (count)</text>
+        <line :x1="chart.plot.x0" :y1="chart.plot.y0" :x2="chart.plot.x0" :y2="chart.plot.y1" stroke="#c5d0d8" />
+        <line :x1="chart.plot.x1" :y1="chart.plot.y0" :x2="chart.plot.x1" :y2="chart.plot.y1" stroke="#e2d4c0" />
+        <line :x1="chart.plot.x0" :y1="chart.plot.y1" :x2="chart.plot.x1" :y2="chart.plot.y1" stroke="#c5d0d8" />
+        <g v-for="t in chart.yTicks" :key="'y'+t.v">
+          <line :x1="chart.plot.x0" :y1="t.y" :x2="chart.plot.x1" :y2="t.y" stroke="#e6edf2" />
+          <text :x="chart.plot.x0 - 6" :y="t.y + 3" fill="#6f7f8d" font-size="10" text-anchor="end">{{ t.label }}</text>
+        </g>
+        <g v-for="t in chart.podTicks" :key="'p'+t.v">
+          <text :x="chart.plot.x1 + 6" :y="t.y + 3" fill="#8e6b3a" font-size="10">{{ t.label }}</text>
+        </g>
+        <g v-for="m in chart.markers" :key="m.id + m.x">
+          <line :x1="m.x" :y1="chart.plot.y0" :x2="m.x" :y2="chart.plot.y1" stroke="#9aa8b3" stroke-dasharray="3 3" opacity="0.7" />
+          <text :x="m.x + 3" :y="chart.plot.y0 + 12" fill="#445566" font-size="10">{{ m.label }}</text>
+        </g>
+        <line v-if="chart.baseY" :x1="chart.plot.x0" :y1="chart.baseY" :x2="chart.plot.x1" :y2="chart.baseY" stroke="#c0392b" stroke-width="1" stroke-dasharray="3 4" opacity="0.45" />
+        <text v-if="chart.baseY && chart.baseLabel" :x="chart.plot.x0 + 4" :y="chart.baseY - 4" fill="#c0392b" font-size="10">baseline {{ chart.baseLabel }}</text>
+        <polyline fill="none" stroke="#c0392b" stroke-width="2.4" :points="chart.api" />
+        <polyline fill="none" stroke="#2980b9" stroke-width="2" :points="chart.etcd" />
+        <polyline fill="none" stroke="#27ae60" stroke-width="2" :points="chart.ovn" />
+        <polyline fill="none" stroke="#8e6b3a" stroke-width="1.6" stroke-dasharray="4 3" :points="chart.pods" />
+        <text :x="chart.plot.x0" :y="chart.plot.y1 + 18" fill="#6f7f8d" font-size="10">{{ chart.first }}</text>
+        <text :x="(chart.plot.x0 + chart.plot.x1) / 2" :y="chart.plot.y1 + 18" fill="#6f7f8d" font-size="10" text-anchor="middle">sample time</text>
+        <text :x="chart.plot.x1" :y="chart.plot.y1 + 18" fill="#6f7f8d" font-size="10" text-anchor="end">{{ chart.last }}</text>
+        <text :x="(chart.plot.x0 + chart.plot.x1) / 2" :y="chart.vb.h - 8" fill="#6f7f8d" font-size="11" text-anchor="middle">X · {{ chart.points.length }} samples · last {{ chart.last }}</text>
+      </svg>
+      <div class="row q-gutter-md text-caption">
+        <span><span class="swatch swatch-api" /> kube-apiserver RSS (the ratchet)</span>
+        <span><span class="swatch swatch-etcd" /> etcd RSS</span>
+        <span><span class="swatch swatch-ovn" /> ovnkube-controller RSS</span>
+        <span><span class="swatch swatch-pods" /> burn pods (right axis)</span>
+      </div>
+    </div>
+    <div v-else class="dasm-panel q-mb-md text-caption text-grey-7">
+      No timeseries yet. Capture baseline, then Sample now (or run Execute with ETCD samples on).
     </div>
 
     <div v-if="snap" class="dasm-panel q-mb-md">
@@ -252,26 +267,53 @@ function stageClass(id) {
 
 const chart = computed(() => {
   const pts = (series.value || []).slice().sort((a, b) => new Date(a.at) - new Date(b.at))
-  const w = 640
-  const h = 200
-  const pad = 10
-  if (!pts.length) return { points: [], api: '', etcd: '', ovn: '', pods: '', first: '', last: '', baseY: 0 }
+  const vb = { w: 720, h: 280 }
+  const plot = { x0: 64, x1: 656, y0: 22, y1: 228, cy: 125 }
+  const empty = { points: [], api: '', etcd: '', ovn: '', pods: '', first: '', last: '', baseY: 0, baseLabel: '', vb, plot, yTicks: [], podTicks: [], markers: [] }
+  if (!pts.length) return empty
   const maxRss = Math.max(1, ...pts.map((p) => Math.max(p.apiserverRssMi || 0, p.etcdRssMi || 0, p.ovnRssMi || 0)), snap.value?.baselineApiserverRssMi || 0)
   const maxPods = Math.max(1, ...pts.map((p) => p.workloadPods || 0))
-  const x = (i) => pad + (i * (w - 2 * pad)) / Math.max(1, pts.length - 1)
-  const yRss = (v) => h - pad - ((v || 0) / maxRss) * (h - 2 * pad)
-  const yPods = (v) => h - pad - ((v || 0) / maxPods) * (h - 2 * pad)
+  const x = (i) => plot.x0 + (i * (plot.x1 - plot.x0)) / Math.max(1, pts.length - 1)
+  const yRss = (v) => plot.y1 - ((v || 0) / maxRss) * (plot.y1 - plot.y0)
+  const yPods = (v) => plot.y1 - ((v || 0) / maxPods) * (plot.y1 - plot.y0)
   const line = (fn) => pts.map((p, i) => `${x(i).toFixed(1)},${fn(p).toFixed(1)}`).join(' ')
   const base = snap.value?.baselineApiserverRssMi || 0
+  const yTicks = [0, 0.5, 1].map((f) => {
+    const v = maxRss * f
+    return { v, y: yRss(v), label: `${Math.round(v)}` }
+  })
+  const podTicks = [0, 1].map((f) => {
+    const v = maxPods * f
+    return { v, y: yPods(v), label: `${Math.round(v)}` }
+  })
+  const order = (stages.value || []).map((s) => s.id)
+  const markers = []
+  let prev = ''
+  pts.forEach((p, i) => {
+    if (!p.cascade || p.cascade === prev) return
+    prev = p.cascade
+    const idx = order.indexOf(p.cascade)
+    markers.push({
+      id: p.cascade,
+      x: x(i),
+      label: idx >= 0 ? `S${idx + 1}` : p.cascade,
+    })
+  })
   return {
     points: pts,
     api: line((p) => yRss(p.apiserverRssMi)),
     etcd: line((p) => yRss(p.etcdRssMi)),
     ovn: line((p) => yRss(p.ovnRssMi)),
     pods: line((p) => yPods(p.workloadPods)),
-    first: fmt(pts[0].at),
-    last: fmt(pts[pts.length - 1].at),
+    first: fmtShort(pts[0].at),
+    last: fmtShort(pts[pts.length - 1].at),
     baseY: base ? yRss(base) : 0,
+    baseLabel: base ? `${Math.round(base)} Mi` : '',
+    vb,
+    plot,
+    yTicks,
+    podTicks,
+    markers,
   }
 })
 
@@ -291,6 +333,11 @@ function sevColor(sev) {
 }
 function fmt(at) {
   try { return new Date(at).toLocaleString() } catch { return '' }
+}
+function fmtShort(at) {
+  try {
+    return new Date(at).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  } catch { return '' }
 }
 function applyPayload(data) {
   if (data?.snapshot) snap.value = data.snapshot
@@ -386,7 +433,7 @@ void cluster
   color: #6f7f8d;
   font-weight: 600;
 }
-.rss-chart { width: 100%; max-height: 240px; background: #f4f7fa; display: block; border-radius: 8px; }
+.rss-chart { width: 100%; max-height: 320px; background: #f4f7fa; display: block; border-radius: 8px; }
 .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: middle; }
 .swatch-api { background: #c0392b; }
 .swatch-etcd { background: #2980b9; }

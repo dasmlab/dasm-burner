@@ -1,12 +1,13 @@
 <template>
   <q-page padding>
-    <div class="dasm-shell q-mb-lg">
+    <div class="dasm-shell q-mb-md">
       <div class="dasm-shell__content">
         <div class="dasm-caps">OVN-Kube Diagnoser</div>
         <h1 class="dasm-title">Is OVN becoming unhealthy?</h1>
         <p class="dasm-subtitle">
-          Active cluster interrogation (nodes, ovnkube pods, DB, dataplane, metrics, logs, events) —
-          not a kube-burner dashboard. Capture a baseline before load, then sample during Execute.
+          {{ clusterLabel }} · baseline {{ baselineLabel }}.
+          Capture before load, sample during Execute. Watermarks: ovnkube-node restarts, Ready, CPU/mem.
+          Snapshots on PVC <code>ovndiag/&lt;id&gt;/snapshot.json</code>.
         </p>
       </div>
     </div>
@@ -16,26 +17,16 @@
       <q-btn unelevated color="primary" icon="refresh" label="Sample now" :loading="busy" :disable="!canAdmin" @click="sample" />
       <q-btn flat color="primary" icon="history" label="Reload latest" :loading="busy" @click="loadLatest" />
       <q-badge v-if="snap?.overallState" :color="stateColor" text-color="white">{{ snap.overallState }}</q-badge>
-      <span v-if="snap?.baselineAt" class="text-caption text-grey-7">baseline {{ fmt(snap.baselineAt) }}</span>
     </div>
     <p class="text-caption text-grey-7 q-mb-md">
-      Sample / baseline run on a single-slot OVN worker (not the HTTP handler). POST returns immediately; this page reloads from the PVC until the snapshot appears (often 30–90s).
+      Off the HTTP path (30–90s). Look at grouped findings, then the node table. History is the strip — it does not grow the page.
     </p>
 
     <div v-if="notice" class="dasm-panel q-mb-md text-positive">{{ notice }}</div>
     <div v-if="error" class="dasm-panel q-mb-md text-negative">{{ error }}</div>
 
-    <div class="dasm-panel q-mb-md">
-      <div class="dasm-stat-label q-mb-xs">What baseline captures</div>
-      <ul class="detail-list">
-        <li><strong>What:</strong> watermarks for ovnkube-node restart counts, per-node Ready, and (when metrics API exists) CPU/mem per container — used later for Δ.</li>
-        <li><strong>Where:</strong> in-memory on this pod + immutable snapshot on the data PVC under <code>ovndiag/&lt;id&gt;/snapshot.json</code>.</li>
-        <li><strong>Cluster:</strong> {{ clusterLabel }} · baseline {{ baselineLabel }}</li>
-      </ul>
-    </div>
-
     <div v-if="snap" class="dasm-panel q-mb-md">
-      <div class="row q-col-gutter-md">
+      <div class="row q-col-gutter-md items-end">
         <div class="col-4 col-sm-2">
           <div class="dasm-stat-label">Healthy</div>
           <div class="text-h6">{{ snap.healthyCount }}</div>
@@ -49,140 +40,166 @@
           <div class="text-h6">{{ snap.criticalCount }}</div>
         </div>
         <div class="col-12 col-sm-6">
-          <div class="dasm-stat-label">Capabilities</div>
-          <div class="text-caption text-mono">{{ capsLabel }}</div>
+          <div class="dasm-stat-label">Look here</div>
+          <div>{{ lookAt }}</div>
         </div>
-      </div>
-      <div v-if="whyLines.length" class="q-mt-md">
-        <div class="dasm-stat-label q-mb-xs">Why?</div>
-        <ul class="why-list">
-          <li v-for="(line, i) in whyLines" :key="i">{{ line }}</li>
-        </ul>
       </div>
     </div>
 
-    <div v-if="snap" class="dasm-panel q-mb-md">
-      <div class="row items-center justify-between q-mb-sm">
-        <div class="dasm-stat-label">Findings</div>
-        <span class="text-caption text-grey-7">{{ findings.length }} warning+ in this sample</span>
-      </div>
-      <div v-if="!findings.length" class="text-caption text-grey-7">No warning+ findings in selected sample.</div>
-      <div v-else class="finding-grid">
-        <div v-for="f in findings" :key="f.id" class="finding-card">
+    <q-expansion-item
+      v-if="snap"
+      class="dasm-panel q-mb-md iso-exp"
+      dense
+      switch-toggle-side
+      expand-separator
+      default-opened
+      :label="`Findings · ${groupedFindings.length} rule(s) · ${findings.length} hit(s)`"
+    >
+      <div v-if="!groupedFindings.length" class="text-caption text-grey-7 q-mt-sm">No warning+ findings in this sample.</div>
+      <div v-else class="finding-list q-mt-sm">
+        <div v-for="g in groupedFindings" :key="g.ruleId" class="finding-card">
           <div class="finding-head">
-            <q-badge dense :color="sevColor(f.severity)" text-color="white">{{ f.ruleId }}</q-badge>
-            <strong>{{ ruleTitle(f.ruleId) }}</strong>
-            <span class="text-mono text-grey-7" v-if="f.node">{{ f.node }}</span>
+            <q-badge dense :color="sevColor(g.severity)" text-color="white">{{ g.ruleId }}</q-badge>
+            <strong>{{ g.title }}</strong>
+            <span class="text-caption text-grey-7">{{ g.systems.length }} system{{ g.systems.length === 1 ? '' : 's' }} reporting</span>
           </div>
-          <div class="finding-summary">{{ f.summary }}</div>
-          <div class="text-caption text-grey-7" v-if="ruleAbout(f.ruleId)">{{ ruleAbout(f.ruleId) }}</div>
-          <div class="text-caption" v-if="f.why">{{ f.why }}</div>
+          <p v-if="g.hint" class="text-caption q-mb-xs">{{ g.hint }}</p>
+          <div class="sys-row">
+            <q-chip
+              v-for="s in g.systems"
+              :key="s.node"
+              dense
+              square
+              outline
+              color="primary"
+              class="sys-chip"
+              :title="s.summary"
+              @click="selectNode(s.node)"
+            >{{ shortNode(s.node) }}<span v-if="s.hint" class="sys-hint"> {{ s.hint }}</span></q-chip>
+          </div>
+          <p class="text-caption text-grey-7 q-mb-none q-mt-xs">{{ g.about }}</p>
         </div>
       </div>
-    </div>
+    </q-expansion-item>
 
-    <div class="dasm-panel q-mb-md">
-      <div class="row items-center justify-between q-mb-sm">
-        <div class="dasm-stat-label">Sample history</div>
-        <span class="text-caption text-grey-7">{{ samples.length }} stored · click a row to inspect</span>
-      </div>
-      <table class="ovn-table">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Kind</th>
-            <th>State</th>
-            <th>Nodes</th>
-            <th>Findings</th>
-            <th>Run</th>
-            <th>Id</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="row in samples"
-            :key="row.id"
-            :class="{ 'is-sel': row.id === selectedSampleId }"
-            @click="openSample(row.id)"
-          >
-            <td class="text-mono">{{ fmt(row.generatedAt) }}</td>
-            <td>{{ row.kind }}</td>
-            <td>{{ row.overallState }}</td>
-            <td>{{ row.nodeCount }}</td>
-            <td>{{ row.findingCount }}</td>
-            <td class="text-mono">{{ row.runId || '—' }}</td>
-            <td class="text-mono">{{ shortId(row.id) }}</td>
-          </tr>
-          <tr v-if="!samples.length">
-            <td colspan="7" class="text-grey-7">No samples yet — Capture baseline or Sample now.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="row q-col-gutter-md">
-      <div class="col-12 col-lg-7">
-        <div class="dasm-panel">
-          <div class="dasm-stat-label q-mb-sm">Per-node health (selected sample)</div>
-          <table class="ovn-table">
-            <thead>
-              <tr>
-                <th>Node</th>
-                <th>State</th>
-                <th>Ready</th>
-                <th>Annots</th>
-                <th>DB</th>
-                <th>DP</th>
-                <th>OVN pod</th>
-                <th>Δ rst</th>
-                <th>CPU (Σ)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="n in (snap?.nodes || [])"
-                :key="n.nodeName"
-                :class="{ 'is-hot': n.overallState !== 'HEALTHY', 'is-sel': n.nodeName === selectedNode }"
-                @click="selectedNode = n.nodeName"
-              >
-                <td class="text-mono">{{ n.nodeName }}</td>
-                <td>{{ n.overallState }}</td>
-                <td>{{ n.node?.ready ? 'yes' : 'no' }}</td>
-                <td>{{ n.network?.annotationsOK === false ? 'drift' : 'ok' }}</td>
-                <td>{{ dbLabel(n.database) }}</td>
-                <td>{{ dpLabel(n.dataplane) }}</td>
-                <td class="text-mono">{{ shortPod(n.ovnKube?.podName) }}</td>
-                <td><strong>{{ n.ovnKube?.restartsDelta ?? 0 }}</strong></td>
-                <td>{{ cpuSum(n.ovnKube?.resources) }}</td>
-              </tr>
-            </tbody>
-          </table>
+    <q-expansion-item
+      class="dasm-panel q-mb-md iso-exp"
+      dense
+      switch-toggle-side
+      expand-separator
+      default-opened
+      label="Per-node health"
+    >
+    <div class="row q-col-gutter-md q-mt-sm">
+      <div class="col-12 col-lg-8">
+        <div>
+          <div class="table-scroll">
+            <table class="ovn-table">
+              <thead>
+                <tr>
+                  <th>Node</th>
+                  <th>State</th>
+                  <th>Ready</th>
+                  <th>Annots</th>
+                  <th>DB</th>
+                  <th>DP</th>
+                  <th>OVN pod</th>
+                  <th>Δ rst</th>
+                  <th>CPU</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="n in (snap?.nodes || [])"
+                  :key="n.nodeName"
+                  :class="{ 'is-hot': n.overallState !== 'HEALTHY', 'is-sel': n.nodeName === selectedNode }"
+                  @click="selectedNode = n.nodeName"
+                >
+                  <td class="text-mono">{{ shortNode(n.nodeName) }}</td>
+                  <td>{{ n.overallState }}</td>
+                  <td>{{ n.node?.ready ? 'yes' : 'no' }}</td>
+                  <td>{{ n.network?.annotationsOK === false ? 'drift' : 'ok' }}</td>
+                  <td>{{ dbLabel(n.database) }}</td>
+                  <td>{{ dpLabel(n.dataplane) }}</td>
+                  <td class="text-mono">{{ shortPod(n.ovnKube?.podName) }}</td>
+                  <td><strong>{{ n.ovnKube?.restartsDelta ?? 0 }}</strong></td>
+                  <td>{{ cpuSum(n.ovnKube?.resources) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
-      <div class="col-12 col-lg-5">
-        <div class="dasm-panel q-mb-md" v-if="nodeDetail">
-          <div class="dasm-stat-label q-mb-sm">{{ nodeDetail.nodeName }}</div>
+      <div class="col-12 col-lg-4">
+        <div v-if="nodeDetail" class="q-mb-md">
+          <div class="dasm-stat-label q-mb-xs">{{ shortNode(nodeDetail.nodeName) }}</div>
           <ul class="detail-list">
-            <li>Ready={{ nodeDetail.node?.ready }} MemoryPressure={{ nodeDetail.node?.memoryPressure }}</li>
-            <li>Annots OK={{ nodeDetail.network?.annotationsOK }} zone={{ nodeDetail.network?.zone || '—' }}</li>
-            <li>DB nbdb={{ nodeDetail.database?.nbdbReady }} sbdb={{ nodeDetail.database?.sbdbReady }} northd={{ nodeDetail.database?.northdReady }}</li>
-            <li>DP ovs={{ nodeDetail.dataplane?.ovsReady }} gw={{ nodeDetail.dataplane?.gatewayOK }} sandbox={{ nodeDetail.dataplane?.sandboxFailures ?? 0 }} pendingNoIP={{ nodeDetail.dataplane?.pendingNoIP ?? 0 }}</li>
-            <li v-for="r in (nodeDetail.ovnKube?.resources || [])" :key="r.container">
-              {{ r.container }}: {{ Number(r.cpuCores || 0).toFixed(3) }}c · {{ Number(r.memoryMiB || 0).toFixed(0) }}Mi
-            </li>
+            <li>Ready={{ nodeDetail.node?.ready }} · MemPressure={{ nodeDetail.node?.memoryPressure }}</li>
+            <li>Annots={{ nodeDetail.network?.annotationsOK }} · zone={{ nodeDetail.network?.zone || '—' }}</li>
+            <li>DB nb={{ nodeDetail.database?.nbdbReady }} sb={{ nodeDetail.database?.sbdbReady }} northd={{ nodeDetail.database?.northdReady }}</li>
+            <li>DP ovs={{ nodeDetail.dataplane?.ovsReady }} gw={{ nodeDetail.dataplane?.gatewayOK }}</li>
           </ul>
         </div>
-        <div class="dasm-panel">
-          <div class="dasm-stat-label q-mb-sm">Events in this sample</div>
-          <ul class="detail-list">
-            <li v-for="(t, i) in (snap?.timeline || []).slice(0, 20)" :key="i">
-              <span class="text-mono">{{ fmt(t.at) }}</span> · {{ t.summary }}
-            </li>
-            <li v-if="!(snap?.timeline || []).length" class="text-grey-7">No timeline events in this snapshot.</li>
-          </ul>
+        <div v-if="groupedEvents.length">
+          <div class="dasm-stat-label q-mb-xs">Events</div>
+          <div v-for="e in groupedEvents" :key="e.key" class="ev-line">
+            <span class="text-caption">{{ e.label }}</span>
+            <span class="text-caption text-grey-7"> · {{ e.count }} node{{ e.count === 1 ? '' : 's' }}</span>
+          </div>
         </div>
       </div>
     </div>
+    </q-expansion-item>
+
+    <q-expansion-item
+      class="dasm-panel q-mb-md iso-exp"
+      dense
+      switch-toggle-side
+      expand-separator
+      :label="`Samples · ${samples.length} stored`"
+      default-opened
+    >
+      <p class="text-caption text-grey-7 q-mt-sm q-mb-sm">
+        Horizontal strip — does not grow the page. Click a tick to load that snapshot.
+      </p>
+      <div v-if="!samples.length" class="text-caption text-grey-7">None yet — Capture baseline or Sample now.</div>
+      <div v-else class="sample-strip" role="list">
+        <button
+          v-for="row in recentSamples"
+          :key="row.id"
+          type="button"
+          class="sample-pill"
+          :class="pillClass(row)"
+          role="listitem"
+          @click="openSample(row.id)"
+        >
+          <span class="sample-pill__dot" />
+          <span class="sample-pill__state">{{ row.overallState || row.kind }}</span>
+          <span class="sample-pill__when">{{ fmtShort(row.generatedAt) }}</span>
+          <span class="sample-pill__meta">{{ row.findingCount || 0 }} hit · {{ row.kind }}</span>
+        </button>
+      </div>
+      <q-select
+        v-if="samples.length > recentSamples.length"
+        class="q-mt-sm"
+        dense
+        outlined
+        emit-value
+        map-options
+        :model-value="selectedSampleId"
+        :options="sampleOptions"
+        label="Older samples"
+        @update:model-value="openSample"
+      />
+    </q-expansion-item>
+
+    <q-expansion-item class="dasm-panel q-mb-md iso-exp" dense switch-toggle-side expand-separator label="Capabilities &amp; how this works">
+      <p class="text-caption q-mt-sm">{{ capsLabel }}</p>
+      <p class="text-caption text-grey-7">
+        Watermarks: ovnkube-node restarts, Ready, CPU/mem when metrics exist.
+        Sample / baseline run on a single-slot worker, not the HTTP handler.
+      </p>
+    </q-expansion-item>
   </q-page>
 </template>
 
@@ -195,7 +212,6 @@ import {
   listOVNDiagHistory,
   sampleOVNDiag,
 } from 'src/services/api'
-import { splitWhy } from 'src/utils/metrics'
 import { useAuth } from 'src/services/auth'
 import { useCluster } from 'src/services/cluster'
 
@@ -211,6 +227,7 @@ const rules = ref({})
 const baselineMeta = ref(null)
 const selectedNode = ref('')
 const selectedSampleId = ref('')
+const RECENT = 10
 
 const stateColor = computed(() => {
   switch (snap.value?.overallState) {
@@ -229,18 +246,99 @@ const capsLabel = computed(() => {
 const findings = computed(() =>
   (snap.value?.findings || []).filter((f) => ['WARNING', 'ERROR', 'CRITICAL', 'NOTICE'].includes(f.severity)).slice(0, 80),
 )
-const whyLines = computed(() => {
-  if (snap.value?.whyLines?.length) return snap.value.whyLines
-  return splitWhy(snap.value?.why)
+const groupedFindings = computed(() => {
+  const map = new Map()
+  for (const f of findings.value) {
+    const id = f.ruleId || 'unknown'
+    if (!map.has(id)) {
+      map.set(id, {
+        ruleId: id,
+        title: ruleTitle(id),
+        about: ruleAbout(id),
+        severity: f.severity,
+        systems: [],
+        nodes: new Map(),
+      })
+    }
+    const g = map.get(id)
+    if (worse(f.severity, g.severity)) g.severity = f.severity
+    const node = f.node || 'cluster'
+    const hint = classHint(f.summary)
+    const prev = g.nodes.get(node)
+    if (!prev) {
+      const sys = { node, summary: f.summary || '', hint }
+      g.nodes.set(node, sys)
+      g.systems.push(sys)
+    } else if (hint && prev.hint !== hint) {
+      prev.hint = prev.hint ? `${prev.hint}, ${hint}` : hint
+      prev.summary = `${prev.summary}; ${f.summary}`
+    }
+  }
+  return [...map.values()].map((g) => {
+    const hints = [...new Set(g.systems.map((s) => s.hint).filter(Boolean))]
+    return {
+      ruleId: g.ruleId,
+      title: g.title,
+      about: g.about,
+      severity: g.severity,
+      systems: g.systems,
+      hint: hints.length ? hints.join(' · ') : stripHost(g.systems[0]?.summary || ''),
+    }
+  }).sort((a, b) => b.systems.length - a.systems.length)
+})
+const lookAt = computed(() => {
+  const g = groupedFindings.value
+  if (!g.length) return 'Nothing in warning+. The node table is the picture.'
+  const top = g[0]
+  return `${top.ruleId} · ${top.title} on ${top.systems.length} system${top.systems.length === 1 ? '' : 's'}. Click a chip to jump to that node.`
+})
+const groupedEvents = computed(() => {
+  const map = new Map()
+  for (const t of (snap.value?.timeline || []).slice(0, 40)) {
+    const label = (t.summary || '').replace(/\s+on\s+\S+$/, '') || 'event'
+    const cur = map.get(label) || { key: label, label, count: 0 }
+    cur.count += 1
+    map.set(label, cur)
+  }
+  return [...map.values()].slice(0, 8)
 })
 const nodeDetail = computed(() => (snap.value?.nodes || []).find((n) => n.nodeName === selectedNode.value) || null)
-const clusterLabel = computed(() => cluster.currentLabel?.value || snap.value?.cluster || '—')
+const clusterLabel = computed(() => cluster.currentLabel.value || snap.value?.cluster || '—')
 const baselineLabel = computed(() => {
   if (baselineMeta.value?.at) return fmt(baselineMeta.value.at)
   if (snap.value?.baselineAt) return fmt(snap.value.baselineAt)
   return 'not captured yet'
 })
+const recentSamples = computed(() => (samples.value || []).slice(0, RECENT))
+const sampleOptions = computed(() =>
+  (samples.value || []).map((s) => ({
+    label: `${fmtShort(s.generatedAt)} · ${s.overallState || s.kind} · ${s.findingCount || 0} hits`,
+    value: s.id,
+  })),
+)
 
+function worse(a, b) {
+  const rank = { CRITICAL: 4, ERROR: 3, WARNING: 2, NOTICE: 1 }
+  return (rank[a] || 0) > (rank[b] || 0)
+}
+function classHint(summary) {
+  if (!summary) return ''
+  const m = summary.match(/class\s+(\w+)\s*[x×>]?\s*(\d+)/i)
+    || summary.match(/\b(ERROR|TIMEOUT|IPTABLES|WARN|WARNING)\b[^\d]*(\d+)/i)
+  return m ? `${m[1]}×${m[2]}` : ''
+}
+function stripHost(summary) {
+  return (summary || '').replace(/\s+on\s+\S+$/, '')
+}
+function pillClass(row) {
+  const st = (row.overallState || '').toLowerCase()
+  return {
+    'is-sel': row.id === selectedSampleId.value,
+    'is-healthy': st === 'healthy',
+    'is-warning': st === 'warning' || st === 'degraded',
+    'is-critical': st === 'critical' || st === 'failed',
+  }
+}
 function sevColor(sev) {
   if (sev === 'CRITICAL' || sev === 'ERROR') return 'negative'
   if (sev === 'WARNING') return 'warning'
@@ -249,13 +347,26 @@ function sevColor(sev) {
 function fmt(at) {
   try { return new Date(at).toLocaleString() } catch { return '' }
 }
+function fmtShort(at) {
+  try {
+    const d = new Date(at)
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } catch { return '' }
+}
 function shortPod(n) {
   if (!n) return '—'
   return n.length > 22 ? n.slice(0, 20) + '…' : n
 }
-function shortId(id) {
-  if (!id) return '—'
-  return id.length > 28 ? id.slice(0, 26) + '…' : id
+function shortNode(n) {
+  if (!n) return '—'
+  const i = n.lastIndexOf('-')
+  if (n.includes('master-')) return n.slice(n.indexOf('master-'))
+  if (n.includes('infra-')) return n.slice(n.indexOf('infra-'))
+  if (n.includes('worker-')) return n.slice(n.indexOf('worker-'))
+  return i > 0 ? n.slice(i + 1) : n
+}
+function selectNode(node) {
+  if (node && node !== 'cluster') selectedNode.value = node
 }
 function dbLabel(d) {
   if (!d?.present) return '—'
@@ -284,7 +395,7 @@ function applyPayload(data, { preferId } = {}) {
   if (data?.rules) rules.value = data.rules
   if (data?.baseline) baselineMeta.value = data.baseline
   if (preferId) selectedSampleId.value = preferId
-  else if (data?.snapshotId) selectedSampleId.value = data.snapshotId
+  else if (data?.samples?.[0]?.id) selectedSampleId.value = data.samples[0].id
   if (!selectedNode.value && snap.value?.nodes?.[0]) selectedNode.value = snap.value.nodes[0].nodeName
 }
 function errText(e) {
@@ -326,7 +437,7 @@ async function openSample(id) {
   try {
     const data = await getOVNDiagSnapshot(id)
     applyPayload(data, { preferId: id })
-    notice.value = `Loaded sample ${shortId(id)}`
+    notice.value = `Loaded sample ${id}`
   } catch (e) {
     error.value = errText(e)
   } finally {
@@ -337,7 +448,7 @@ async function sample() {
   busy.value = true
   error.value = ''
   notice.value = 'Queued on OVN worker (off the web path)…'
-  const before = snap.value?.id || snap.value?.generatedAt || samples.value?.[0]?.id
+  const before = samples.value?.[0]?.id || snap.value?.generatedAt
   try {
     await sampleOVNDiag({})
     const deadline = Date.now() + 120000
@@ -345,7 +456,7 @@ async function sample() {
       await new Promise((r) => setTimeout(r, 2000))
       const data = await getOVNDiag()
       applyPayload(data)
-      const now = data.snapshot?.id || data.snapshot?.generatedAt || data.samples?.[0]?.id
+      const now = data.samples?.[0]?.id || data.snapshot?.generatedAt
       if (now && now !== before) {
         notice.value = `Sample stored${data.snapshotId || data.samples?.[0]?.id ? ` · ${data.snapshotId || data.samples[0].id}` : ''}`
         await refreshHistory()
@@ -364,7 +475,7 @@ async function captureBaseline() {
   busy.value = true
   error.value = ''
   notice.value = 'Baseline queued on OVN worker…'
-  const before = snap.value?.id || snap.value?.generatedAt || samples.value?.[0]?.id
+  const before = samples.value?.[0]?.id || snap.value?.generatedAt
   try {
     await baselineOVNDiag()
     const deadline = Date.now() + 120000
@@ -372,7 +483,7 @@ async function captureBaseline() {
       await new Promise((r) => setTimeout(r, 2000))
       const data = await getOVNDiag()
       applyPayload(data)
-      const now = data.snapshot?.id || data.snapshot?.generatedAt || data.samples?.[0]?.id
+      const now = data.samples?.[0]?.id || data.snapshot?.generatedAt
       if (now && now !== before) {
         notice.value = `Baseline captured · ${data.snapshotId || data.samples?.[0]?.id || 'snapshot'} on PVC.`
         await refreshHistory()
@@ -401,37 +512,24 @@ onMounted(loadLatest)
   text-align: left;
   padding: 0.35rem 0.4rem;
   border-bottom: 1px solid #d9e2ea;
+  white-space: nowrap;
 }
 .ovn-table tr.is-hot td { background: #fff4f0; }
 .ovn-table tr.is-sel td { outline: 1px solid #2f8f7d; }
 .ovn-table tr { cursor: pointer; }
+.table-scroll { overflow: auto; max-height: 28rem; }
 .detail-list {
   margin: 0;
   padding-left: 1rem;
   font-size: 0.85rem;
 }
-.detail-list li { margin-bottom: 0.45rem; }
-.why-list {
-  margin: 0;
-  padding-left: 1.15rem;
-  font-size: 0.9rem;
-  line-height: 1.45;
-  color: #1d2b36;
-}
-.why-list li { margin-bottom: 0.4rem; }
-.finding-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.75rem;
-}
-@media (min-width: 900px) {
-  .finding-grid { grid-template-columns: 1fr 1fr; }
-}
+.detail-list li { margin-bottom: 0.35rem; }
+.finding-list { display: flex; flex-direction: column; gap: 0.65rem; }
 .finding-card {
   border: 1px solid #d9e2ea;
   border-radius: 10px;
   background: #f7fafc;
-  padding: 0.75rem 0.85rem;
+  padding: 0.65rem 0.8rem;
 }
 .finding-head {
   display: flex;
@@ -440,6 +538,62 @@ onMounted(loadLatest)
   align-items: center;
   margin-bottom: 0.35rem;
 }
-.finding-summary { font-size: 0.9rem; margin-bottom: 0.25rem; }
+.sys-row { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.sys-chip { font-size: 0.75rem; }
+.sys-hint { color: #6f7f8d; font-weight: 500; }
+.ev-line { padding: 0.15rem 0; }
+.sample-strip {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  padding: 0.15rem 0 0.5rem;
+}
+.sample-pill {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 7.2rem;
+  text-align: left;
+  border: 1px solid var(--dasm-border-soft);
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.45rem 0.55rem 0.45rem 0.7rem;
+  margin-right: 0.7rem;
+  cursor: pointer;
+}
+.sample-pill::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -0.7rem;
+  width: 0.7rem;
+  height: 1px;
+  background: #c5d0d8;
+}
+.sample-pill:last-child { margin-right: 0; }
+.sample-pill:last-child::after { display: none; }
+.sample-pill__dot {
+  position: absolute;
+  left: 0.28rem;
+  top: 0.55rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #9aa8b3;
+}
+.sample-pill.is-healthy .sample-pill__dot { background: #2f8f7d; }
+.sample-pill.is-warning .sample-pill__dot { background: #c48a2a; }
+.sample-pill.is-critical .sample-pill__dot { background: #c0392b; }
+.sample-pill.is-sel { border-color: var(--dasm-border-strong); background: rgba(63, 122, 107, 0.08); }
+.sample-pill__state { display: block; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; }
+.sample-pill__when { display: block; font-size: 0.9rem; }
+.sample-pill__meta { display: block; font-size: 0.72rem; color: #6f7f8d; }
+.iso-exp :deep(.q-item) { padding-left: 0; min-height: 2.2rem; }
+.iso-exp :deep(.q-item__label) {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f7f8d;
+  font-weight: 600;
+}
 .text-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 </style>
