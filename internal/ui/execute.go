@@ -588,10 +588,20 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 					run.appendLog("warn", "OVNDIAG", bid, "OVN worker busy — sample skipped")
 				}
 			}
-			if enableEtcd && !dryRun && (phase == runner.PhaseBatchMeasurement || phase == runner.PhaseFinalMeasurement || phase == runner.PhaseHealthCheck) {
+			if enableEtcd && !dryRun && (phase == runner.PhaseBatchMeasurement || phase == runner.PhaseFinalMeasurement || phase == runner.PhaseHealthCheck || phase == runner.PhaseAborted) {
 				bid := batch
 				if !s.enqueueEtcd("sample", bid, run) {
 					run.appendLog("warn", "ETCDDIAG", bid, "ETCD worker busy — sample skipped")
+				}
+			}
+			if enableOVN && !dryRun && phase == runner.PhaseAborted {
+				if !s.enqueueOVN("sample", batch, run) {
+					run.appendLog("warn", "OVNDIAG", batch, "OVN worker busy — sample skipped")
+				}
+			}
+			if phase == runner.PhaseWaitForReady && msg != "waiting" && msg != "skipped" && msg != "ready wait skipped" && enableEtcd && !dryRun {
+				if !s.enqueueEtcd("sample", batch, run) {
+					run.appendLog("warn", "ETCDDIAG", batch, "ETCD worker busy — sample skipped")
 				}
 			}
 		},

@@ -425,8 +425,11 @@ func checkHealth(ctx context.Context, opts Options, rep *Report, br *BatchReport
 	}
 	h, err := opts.Cluster.ClusterHealth(ctx, opts.Graph.RunID)
 	if err != nil {
-		log(PhaseHealthCheck, id, "health probe failed: "+err.Error())
-		return nil
+		log(PhaseHealthCheck, id, "HOLD health probe failed: "+err.Error()+" — stopping creates, leaving objects up")
+		rep.Aborted = true
+		rep.AbortReason = "control-plane unreachable: " + err.Error()
+		log(PhaseAborted, id, "HOLD — objects left in place for triage")
+		return fmt.Errorf("hold: health probe failed: %w", err)
 	}
 	rep.Health = h
 	br.Health = h
