@@ -8,11 +8,14 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/dasmlab/dasm-burner/internal/topology"
 )
 
-// SampleLive interrogates control-plane + etcd (+ kube-apiserver static pods).
-func SampleLive(ctx context.Context, cs kubernetes.Interface, runID, cluster string, batchID int) (*Snapshot, error) {
+// SampleLive interrogates control-plane + etcd + kube-apiserver + RSS (metrics.k8s.io).
+func SampleLive(ctx context.Context, cs kubernetes.Interface, dyn dynamic.Interface, runID, cluster string, batchID int) (*Snapshot, error) {
 	if cs == nil {
 		return nil, fmt.Errorf("nil clientset")
 	}
@@ -59,6 +62,26 @@ func SampleLive(ctx context.Context, cs kubernetes.Interface, runID, cluster str
 		snap.Masters = append(snap.Masters, *m)
 	}
 
+	for _, n := range nodes.Items {
+		if isMaster(n) {
+			continue
+		}
+		if n.Labels != nil {
+			if _, ok := n.Labels["node-role.kubernetes.io/infra"]; ok {
+				continue
+			}
+		}
+		if !condTrue(n, corev1.NodeReady) {
+			continue
+		}
+		snap.WorkerNodes++
+		if q, ok := n.Status.Allocatable[corev1.ResourcePods]; ok && !q.IsZero() {
+			if v := int(q.Value()); v > snap.MaxPodsTypical {
+				snap.MaxPodsTypical = v
+			}
+		}
+	}
+
 	etcdPods, _ := cs.CoreV1().Pods("openshift-etcd").List(ctx, metav1.ListOptions{})
 	for _, p := range etcdPods.Items {
 		if !strings.HasPrefix(p.Name, "etcd-") || strings.Contains(p.Name, "guard") {
@@ -75,11 +98,6 @@ func SampleLive(ctx context.Context, cs kubernetes.Interface, runID, cluster str
 			addFinding(snap, "ETCD002", SevError, p.Spec.NodeName, "etcd",
 				fmt.Sprintf("etcd pod %s not Ready", p.Name),
 				"Member unavailable — watch quorum and API latency.")
-		}
-		if rc >= 3 {
-			addFinding(snap, "ETCD004", SevWarning, p.Spec.NodeName, "etcd",
-				fmt.Sprintf("etcd pod %s restarts=%d", p.Name, rc),
-				"Elevated restarts often follow fsync/disk or OOM pressure.")
 		}
 		if m, ok := masters[p.Spec.NodeName]; ok {
 			m.EtcdPod = p.Name
@@ -110,21 +128,59 @@ func SampleLive(ctx context.Context, cs kubernetes.Interface, runID, cluster str
 		if m, ok := masters[p.Spec.NodeName]; ok {
 			m.APIServerPod = p.Name
 			m.APIServerReady = ready
+			m.APIServerRestarts = restartCount(p)
 		}
 	}
 
-	// refresh masters slice with etcd/kas annotations
+	ovn, _ := cs.CoreV1().Pods("openshift-ovn-kubernetes").List(ctx, metav1.ListOptions{})
+	for _, p := range ovn.Items {
+		if !strings.Contains(p.Name, "ovnkube-node") {
+			continue
+		}
+		if m, ok := masters[p.Spec.NodeName]; ok {
+			m.OVNPod = p.Name
+		}
+	}
+
+	nsList, _ := cs.CoreV1().Namespaces().List(ctx, metav1.ListOptions{LabelSelector: topology.LabelManaged + "=true"})
+	snap.WorkloadNS = len(nsList.Items)
+	pods, _ := cs.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: topology.LabelManaged + "=true"})
+	snap.WorkloadPods = len(pods.Items)
+
+	metricsHit := false
+	for _, m := range masters {
+		if mi, ok := containerRSSMi(ctx, dyn, "openshift-kube-apiserver", m.APIServerPod, "kube-apiserver"); ok {
+			m.APIRSSMi = mi
+			snap.APIRSSMi += mi
+			metricsHit = true
+		}
+		if mi, ok := containerRSSMi(ctx, dyn, "openshift-etcd", m.EtcdPod, "etcd"); ok {
+			m.EtcdRSSMi = mi
+			snap.EtcdRSSMi += mi
+			metricsHit = true
+		}
+		if mi, ok := containerRSSMi(ctx, dyn, "openshift-ovn-kubernetes", m.OVNPod, "ovnkube-controller"); ok {
+			m.OVNRSSMi = mi
+			snap.OVNRSSMi += mi
+			metricsHit = true
+		}
+	}
+	snap.MetricsOK = metricsHit
+
+	// refresh masters slice with etcd/kas/rss annotations
 	for i := range snap.Masters {
 		if m, ok := masters[snap.Masters[i].Name]; ok {
 			snap.Masters[i] = *m
 		}
 	}
 
+	Classify(snap)
 	score(snap)
 	return snap, nil
 }
 
 func score(snap *Snapshot) {
+	snap.CriticalCount, snap.WarningCount, snap.HealthyCount = 0, 0, 0
 	for _, f := range snap.Findings {
 		switch f.Severity {
 		case SevCritical:
@@ -146,6 +202,9 @@ func score(snap *Snapshot) {
 		snap.HealthyCount = snap.MastersReady
 	}
 	var why []string
+	if snap.Cascade != "" && snap.Cascade != StageIdle {
+		why = append(why, fmt.Sprintf("cascade=%s — %s", snap.Cascade, snap.CascadeWhy))
+	}
 	for _, f := range snap.Findings {
 		if f.Severity == SevCritical || f.Severity == SevError {
 			why = append(why, f.Summary)
@@ -160,7 +219,7 @@ func score(snap *Snapshot) {
 
 func addFinding(snap *Snapshot, rule string, sev Severity, node, comp, summary, why string) {
 	snap.Findings = append(snap.Findings, Finding{
-		ID: fmt.Sprintf("%s-%d", rule, len(snap.Findings)+1),
+		ID:     fmt.Sprintf("%s-%d", rule, len(snap.Findings)+1),
 		RuleID: rule, Severity: sev, Node: node, Component: comp,
 		Summary: summary, Why: why, BatchID: snap.BatchID, At: snap.GeneratedAt,
 	})

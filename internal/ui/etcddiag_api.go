@@ -12,6 +12,20 @@ import (
 	"github.com/dasmlab/dasm-burner/internal/kube"
 )
 
+// cascadeModel is the density failure order we reproduce on TEST3-class clusters.
+var cascadeModel = map[string]any{
+	"order": []string{"kube-apiserver", "etcd", "ovn-kube-node / masters"},
+	"stages": []map[string]string{
+		{"id": "idle", "name": "Idle", "see": "Ready 3/3, RSS near baseline"},
+		{"id": "api_flex", "name": "API flex", "see": "kube-apiserver RSS climbs; LIST/WATCH cache; etcd still Ready"},
+		{"id": "etcd_flex", "name": "etcd flex", "see": "etcd timeouts / member not Ready / MemoryPressure"},
+		{"id": "collapse", "name": "Collapse", "see": "master NotReady, OVN timeouts, API flaps"},
+		{"id": "leftover", "name": "Leftover RSS", "see": "workload deleted; API RSS still fat until static-pod restart"},
+	},
+	"lab": "maxPods on workers (this cluster typically 1000) · host prefix /22 so IPs are not the cliff",
+	"rss": "Go kube-apiserver RSS is a ratchet. Deletes free watch-cache occupancy, not OS working set.",
+}
+
 type etcdJob struct {
 	kind    string
 	batchID int
@@ -74,7 +88,7 @@ func (s *Server) performEtcdJob(job etcdJob) {
 	}
 	m.mu.Unlock()
 
-	snap, err := etcddiag.SampleLive(ctx, live.Clientset(), runID, cluster, job.batchID)
+	snap, err := etcddiag.SampleLive(ctx, live.Clientset(), live.Dynamic(), runID, cluster, job.batchID)
 	if err != nil {
 		s.eventBus().Publish("etcd", cluster, "", map[string]any{"error": err.Error(), "kind": job.kind})
 		if job.log != nil {
@@ -85,6 +99,8 @@ func (s *Server) performEtcdJob(job etcdJob) {
 	if job.kind == "baseline" {
 		snap.Kind = "baseline"
 		snap.BaselineAt = snap.GeneratedAt
+	} else if base, err := etcddiag.LoadBaseline(s.RunDir); err == nil && base != nil {
+		etcddiag.CompareBaseline(snap, base)
 	}
 	id, _ := etcddiag.WriteSnapshot(s.RunDir, snap)
 	s.eventBus().Publish("etcd", cluster, "", map[string]any{
@@ -97,8 +113,8 @@ func (s *Server) performEtcdJob(job etcdJob) {
 	})
 	if job.log != nil {
 		job.log.appendLog("info", "ETCDDIAG", job.batchID,
-			fmt.Sprintf("%s · %s · masters=%d/%d etcd=%d/%d findings=%d · snapshot %s",
-				job.kind, snap.OverallState, snap.MastersReady, snap.MastersTotal, snap.EtcdReady, snap.EtcdTotal, snap.FindingCount, id))
+			fmt.Sprintf("%s · %s · cascade=%s · apiRSS=%.0fMi etcdRSS=%.0fMi ovnRSS=%.0fMi pods=%d · snapshot %s",
+				job.kind, snap.OverallState, snap.Cascade, snap.APIRSSMi, snap.EtcdRSSMi, snap.OVNRSSMi, snap.WorkloadPods, id))
 	}
 }
 
@@ -117,12 +133,14 @@ func (s *Server) etcddiagGet(w http.ResponseWriter, r *http.Request) {
 	sums, _ := etcddiag.ListSummaries(s.RunDir, 50)
 	if snap, err := etcddiag.LoadLatest(s.RunDir); err == nil && snap != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"snapshot": snap, "cached": true, "samples": sums, "rules": etcddiag.RuleCatalog,
+			"snapshot": snap, "cached": true, "samples": sums, "series": etcddiag.LoadSeries(s.RunDir),
+			"rules": etcddiag.RuleCatalog, "model": cascadeModel,
 		})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"snapshot": nil, "cached": true, "samples": sums, "rules": etcddiag.RuleCatalog,
+		"snapshot": nil, "cached": true, "samples": sums, "series": etcddiag.LoadSeries(s.RunDir),
+		"rules": etcddiag.RuleCatalog, "model": cascadeModel,
 	})
 }
 
@@ -171,7 +189,7 @@ func (s *Server) etcddiagHistoryAPI(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, fmt.Errorf("snapshot %s: %w", path, err))
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"snapshot": snap, "rules": etcddiag.RuleCatalog})
+		writeJSON(w, http.StatusOK, map[string]any{"snapshot": snap, "rules": etcddiag.RuleCatalog, "model": cascadeModel})
 		return
 	}
 	sums, err := etcddiag.ListSummaries(s.RunDir, 50)
@@ -180,7 +198,8 @@ func (s *Server) etcddiagHistoryAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"samples": sums, "rules": etcddiag.RuleCatalog,
-		"store": "PVC /data (runDir/etcddiag/<id>/snapshot.json)",
+		"samples": sums, "series": etcddiag.LoadSeries(s.RunDir), "rules": etcddiag.RuleCatalog,
+		"model": cascadeModel,
+		"store": "PVC /data (runDir/etcddiag/<id>/snapshot.json + series.json)",
 	})
 }
