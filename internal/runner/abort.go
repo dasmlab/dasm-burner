@@ -13,15 +13,28 @@ type Decision struct {
 	Reason string      `json:"reason,omitempty"`
 	Level  string      `json:"level"` // NORMAL, WARNING, ABORT
 	Health kube.Health `json:"health"`
+	Pulse  string      `json:"pulse,omitempty"` // control-plane one-liner for live log
 }
 
 func Evaluate(safety config.Safety, h kube.Health) Decision {
 	d := Decision{Health: h, Level: "NORMAL"}
+	d.Pulse = controlPlanePulse(h)
 	if !safety.Enabled {
 		return d
 	}
 	var reasons []string
 
+	// Masters / etcd first — tonight's cliff was control-plane, not workers.
+	if safety.AbortOn.MasterNotReady && h.MastersNotReady > 0 {
+		names := h.MasterNotReadyNodes
+		if len(names) > 3 {
+			names = names[:3]
+		}
+		reasons = append(reasons, fmt.Sprintf("control-plane NotReady=%d %v", h.MastersNotReady, names))
+	}
+	if safety.AbortOn.EtcdUnhealthy && h.EtcdPods > 0 && h.EtcdReady < h.EtcdPods {
+		reasons = append(reasons, fmt.Sprintf("etcd pods not Ready=%d/%d", h.EtcdPods-h.EtcdReady, h.EtcdPods))
+	}
 	if safety.AbortOn.NodeNotReady && h.NodesNotReady > safety.Thresholds.MaxNodeNotReady {
 		reasons = append(reasons, fmt.Sprintf("nodes not Ready=%d (max %d)", h.NodesNotReady, safety.Thresholds.MaxNodeNotReady))
 	}
@@ -49,4 +62,12 @@ func Evaluate(safety config.Safety, h kube.Health) Decision {
 		d.Reason += "; " + reasons[i]
 	}
 	return d
+}
+
+func controlPlanePulse(h kube.Health) string {
+	return fmt.Sprintf("masters=%d/%d etcd=%d/%d memPressure=%d ovn=%d/%d",
+		h.MastersReady, h.MastersReady+h.MastersNotReady,
+		h.EtcdReady, h.EtcdPods,
+		h.MastersMemoryPressure,
+		h.OVNReady, h.OVNPods)
 }

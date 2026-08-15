@@ -115,9 +115,11 @@ func Default() *Config {
 		Safety: Safety{
 			Enabled: true,
 			AbortOn: AbortOn{
-				NodeNotReady:  true,
-				OOMKilled:     true,
-				CriticalAlert: true,
+				NodeNotReady:   true,
+				MasterNotReady: true,
+				EtcdUnhealthy:  true,
+				OOMKilled:      true,
+				CriticalAlert:  true,
 			},
 			Thresholds: Thresholds{
 				MaxPodFailurePercent: 5,

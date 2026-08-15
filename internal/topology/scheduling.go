@@ -10,11 +10,14 @@ import (
 
 // ApplyScheduling strips tolerations that would allow avoided taints and sets
 // a required nodeAffinity so pods also skip nodes labeled like those roles.
+// Control-plane / master roles are ALWAYS excluded (hard-coded) — density
+// workloads never land on masters regardless of the UI avoidTaints list.
 // aaustin: infra nodes are tainted node-role.kubernetes.io=infra — do not tolerate it.
 func ApplyScheduling(spec *corev1.PodSpec, avoid []config.AvoidTaint) {
 	if spec == nil {
 		return
 	}
+	avoid = withControlPlaneAvoid(avoid)
 	spec.Tolerations = FilterTolerations(spec.Tolerations, avoid)
 	if aff := AvoidTaintAffinity(avoid); aff != nil {
 		if spec.Affinity == nil {
@@ -22,6 +25,20 @@ func ApplyScheduling(spec *corev1.PodSpec, avoid []config.AvoidTaint) {
 		}
 		spec.Affinity.NodeAffinity = mergeNodeAffinity(spec.Affinity.NodeAffinity, aff)
 	}
+}
+
+// ControlPlaneRoleLabels must never receive burn workloads.
+var ControlPlaneRoleLabels = []string{
+	"node-role.kubernetes.io/master",
+	"node-role.kubernetes.io/control-plane",
+}
+
+func withControlPlaneAvoid(avoid []config.AvoidTaint) []config.AvoidTaint {
+	out := append([]config.AvoidTaint(nil), avoid...)
+	for _, key := range ControlPlaneRoleLabels {
+		out = append(out, config.AvoidTaint{Key: key, Effect: "NoSchedule"})
+	}
+	return out
 }
 
 // FilterTolerations drops any toleration that would match an avoided taint.
@@ -87,6 +104,11 @@ func avoidLabelExpressions(avoid []config.AvoidTaint) []corev1.NodeSelectorRequi
 			Operator: corev1.NodeSelectorOpNotIn,
 			Values:   []string{value},
 		})
+	}
+
+	// Hard rule: never schedule burn pods on control-plane/master.
+	for _, key := range ControlPlaneRoleLabels {
+		addDoesNotExist(key)
 	}
 
 	for _, a := range avoid {

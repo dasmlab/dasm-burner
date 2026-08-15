@@ -61,6 +61,17 @@ export const listOVNDiagHistory = () =>
 export const getOVNDiagSnapshot = (id) =>
   api.get(`/ovndiag/history/${encodeURIComponent(id)}`, { timeout: 60_000 }).then((r) => r.data)
 
+export const getEtcdDiag = () =>
+  api.get('/etcddiag', { timeout: 60_000 }).then((r) => r.data)
+export const sampleEtcdDiag = (body) =>
+  api.post('/etcddiag/sample', body || {}, { timeout: 20_000 }).then((r) => r.data)
+export const baselineEtcdDiag = () =>
+  api.post('/etcddiag/baseline', {}, { timeout: 20_000 }).then((r) => r.data)
+export const listEtcdDiagHistory = () =>
+  api.get('/etcddiag/history', { timeout: 60_000 }).then((r) => r.data)
+export const getEtcdDiagSnapshot = (id) =>
+  api.get(`/etcddiag/history/${encodeURIComponent(id)}`, { timeout: 60_000 }).then((r) => r.data)
+
 export async function getAuthConfig() {
   const { data } = await api.get('/auth/config')
   return data

@@ -114,6 +114,13 @@ func densityNodeExcluded(n corev1.Node, avoid []config.AvoidTaint) bool {
 	if labels == nil {
 		labels = map[string]string{}
 	}
+	// Hard rule: never count master/control-plane toward density slots.
+	if _, ok := labels["node-role.kubernetes.io/master"]; ok {
+		return true
+	}
+	if _, ok := labels["node-role.kubernetes.io/control-plane"]; ok {
+		return true
+	}
 	// Avoid-infra affinity: skip nodes carrying avoided role labels.
 	for _, a := range avoid {
 		switch {

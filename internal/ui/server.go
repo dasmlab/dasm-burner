@@ -35,6 +35,8 @@ type Server struct {
 	bus            *EventBus
 	ovnQ           chan ovnJob
 	ovnMu          sync.Mutex
+	etcdQ          chan etcdJob
+	etcdMu         sync.Mutex
 	indexMu        sync.Mutex
 	indexAt        time.Time
 	indexCluster   string
@@ -94,10 +96,17 @@ func New(version, runDir, configPath, kubeconfig string, static fs.FS, authSvc *
 	s.Mux.Handle("/api/v1/ovndiag/sample", s.admin(s.ovndiagSample))
 	s.Mux.Handle("/api/v1/ovndiag/history", s.guest(s.ovndiagHistoryAPI))
 	s.Mux.Handle("/api/v1/ovndiag/history/", s.guest(s.ovndiagHistoryAPI))
+	s.Mux.Handle("/api/v1/etcddiag", s.allowGuest(s.etcddiagAPI, http.MethodGet))
+	s.Mux.Handle("/api/v1/etcddiag/baseline", s.admin(s.etcddiagBaselineAPI))
+	s.Mux.Handle("/api/v1/etcddiag/sample", s.admin(s.etcddiagSample))
+	s.Mux.Handle("/api/v1/etcddiag/history", s.guest(s.etcddiagHistoryAPI))
+	s.Mux.Handle("/api/v1/etcddiag/history/", s.guest(s.etcddiagHistoryAPI))
 	s.Mux.HandleFunc("/", s.spa)
 	s.bus = NewEventBus()
 	s.ovnQ = make(chan ovnJob, 4)
 	go s.loopOVNWorker()
+	s.etcdQ = make(chan etcdJob, 4)
+	go s.loopEtcdWorker()
 	go s.loopStatusPublisher()
 	return s
 }

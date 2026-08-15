@@ -44,4 +44,25 @@ func TestApplyScheduling(t *testing.T) {
 	if spec.Affinity == nil || spec.Affinity.NodeAffinity == nil {
 		t.Fatal("expected nodeAffinity")
 	}
+	exprs := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions
+	haveMaster, haveCP := false, false
+	for _, e := range exprs {
+		if e.Operator == corev1.NodeSelectorOpDoesNotExist && e.Key == "node-role.kubernetes.io/master" {
+			haveMaster = true
+		}
+		if e.Operator == corev1.NodeSelectorOpDoesNotExist && e.Key == "node-role.kubernetes.io/control-plane" {
+			haveCP = true
+		}
+	}
+	if !haveMaster || !haveCP {
+		t.Fatalf("expected hard master+control-plane DoesNotExist, got %+v", exprs)
+	}
+}
+
+func TestHardControlPlaneEvenWithEmptyAvoid(t *testing.T) {
+	spec := &corev1.PodSpec{}
+	ApplyScheduling(spec, nil)
+	if spec.Affinity == nil {
+		t.Fatal("expected affinity even with nil avoid")
+	}
 }

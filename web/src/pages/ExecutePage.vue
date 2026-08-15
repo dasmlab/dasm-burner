@@ -266,7 +266,9 @@
             <q-toggle v-model="allowLarge" dense label="Allow >10 namespaces" :disable="running || dryRun || !canAdmin" />
             <q-toggle v-model="skipBaseline" dense label="Skip baseline wait" :disable="running || !canAdmin" />
             <q-toggle v-model="enableOVNDiag" dense label="OVN Diagnoser samples" :disable="running || dryRun || !canAdmin" />
-            <div class="dasm-stat-label q-mt-sm q-mb-xs">Do not tolerate</div>
+            <q-toggle v-model="enableEtcdDiag" dense label="ETCD / control-plane samples" :disable="running || dryRun || !canAdmin" />
+            <div class="text-caption text-grey-7 q-mt-xs">Masters / control-plane are always excluded from burn scheduling.</div>
+            <div class="dasm-stat-label q-mt-sm q-mb-xs">Do not tolerate (extra)</div>
             <q-select
               v-model="avoidTaints"
               :options="avoidTaintOptions"
@@ -400,6 +402,7 @@ const confirm = ref(false)
 const allowLarge = ref(false)
 const skipBaseline = ref(true)
 const enableOVNDiag = ref(true)
+const enableEtcdDiag = ref(true)
 const avoidTaints = ref(['node-role.kubernetes.io=infra:NoSchedule'])
 const avoidTaintOptions = [
   'node-role.kubernetes.io=infra:NoSchedule',
@@ -806,6 +809,7 @@ async function start() {
       allowLarge: allowLarge.value,
       skipBaseline: skipBaseline.value,
       enableOVNDiag: enableOVNDiag.value,
+      enableEtcdDiag: enableEtcdDiag.value,
       avoidTaints: [...avoidTaints.value],
     }
     let data

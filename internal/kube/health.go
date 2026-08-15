@@ -30,6 +30,15 @@ type Health struct {
 	NodesNotReady int       `json:"nodesNotReady"`
 	NotReadyNodes []string  `json:"notReadyNodes,omitempty"`
 
+	MastersReady         int      `json:"mastersReady"`
+	MastersNotReady      int      `json:"mastersNotReady"`
+	MasterNotReadyNodes  []string `json:"masterNotReadyNodes,omitempty"`
+	MastersMemoryPressure int     `json:"mastersMemoryPressure,omitempty"`
+
+	EtcdPods     int `json:"etcdPods,omitempty"`
+	EtcdReady    int `json:"etcdReady,omitempty"`
+	EtcdRestarts int `json:"etcdRestarts,omitempty"`
+
 	ManagedPods  int `json:"managedPods"`
 	ManagedReady int `json:"managedReadyPods"`
 	FailedPods   int `json:"failedPods"`
@@ -65,11 +74,23 @@ func (l *Live) ClusterHealth(ctx context.Context, runID string) (Health, error) 
 		return h, err
 	}
 	for _, n := range nodes.Items {
-		if nodeReady(n) {
+		ready := nodeReady(n)
+		if ready {
 			h.NodesReady++
 		} else {
 			h.NodesNotReady++
 			h.NotReadyNodes = append(h.NotReadyNodes, n.Name)
+		}
+		if isControlPlaneNode(n) {
+			if ready {
+				h.MastersReady++
+			} else {
+				h.MastersNotReady++
+				h.MasterNotReadyNodes = append(h.MasterNotReadyNodes, n.Name)
+			}
+			if nodeConditionTrue(n, corev1.NodeMemoryPressure) {
+				h.MastersMemoryPressure++
+			}
 		}
 	}
 	h.NodeRoles = countNodeRoles(nodes.Items)
@@ -109,6 +130,29 @@ func (l *Live) ClusterHealth(ctx context.Context, runID string) (Health, error) 
 				Restarts: rc,
 				Phase:    string(p.Status.Phase),
 			})
+		}
+	}
+
+	if etcd, err := l.cs.CoreV1().Pods("openshift-etcd").List(ctx, metav1.ListOptions{
+		LabelSelector: "app=etcd",
+	}); err == nil {
+		for _, p := range etcd.Items {
+			h.EtcdPods++
+			if podReady(p) {
+				h.EtcdReady++
+			}
+			h.EtcdRestarts += restartCount(p)
+		}
+	} else if etcd, err := l.cs.CoreV1().Pods("openshift-etcd").List(ctx, metav1.ListOptions{}); err == nil {
+		for _, p := range etcd.Items {
+			if !strings.HasPrefix(p.Name, "etcd-") {
+				continue
+			}
+			h.EtcdPods++
+			if podReady(p) {
+				h.EtcdReady++
+			}
+			h.EtcdRestarts += restartCount(p)
 		}
 	}
 
@@ -163,6 +207,28 @@ func ApplyOVNRestartDeltas(open, close Health) Health {
 func nodeReady(n corev1.Node) bool {
 	for _, c := range n.Status.Conditions {
 		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+func isControlPlaneNode(n corev1.Node) bool {
+	if n.Labels == nil {
+		return false
+	}
+	if _, ok := n.Labels["node-role.kubernetes.io/master"]; ok {
+		return true
+	}
+	if _, ok := n.Labels["node-role.kubernetes.io/control-plane"]; ok {
+		return true
+	}
+	return false
+}
+
+func nodeConditionTrue(n corev1.Node, t corev1.NodeConditionType) bool {
+	for _, c := range n.Status.Conditions {
+		if c.Type == t {
 			return c.Status == corev1.ConditionTrue
 		}
 	}

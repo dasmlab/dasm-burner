@@ -88,7 +88,20 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 				return finish(rep, err)
 			}
 			if i < len(batches)-1 {
-				if err := sleep(ctx, cfg.Deployment.BatchDelay.Std()); err != nil {
+				delay := cfg.Deployment.BatchDelay.Std()
+				if n := len(rep.Batches); n > 0 {
+					last := rep.Batches[n-1]
+					if last.HealthLevel == "WARNING" || last.Health.MastersMemoryPressure > 0 || last.Health.MastersNotReady > 0 {
+						extra := 45 * time.Second
+						if delay < extra {
+							delay = extra
+						} else {
+							delay *= 2
+						}
+						log(PhaseHealthCheck, i+1, fmt.Sprintf("CONTROLPLANE settle %s before next wave", delay.Round(time.Second)))
+					}
+				}
+				if err := sleep(ctx, delay); err != nil {
 					return finish(rep, err)
 				}
 			}
@@ -421,27 +434,33 @@ func checkHealth(ctx context.Context, opts Options, rep *Report, br *BatchReport
 	br.HealthLevel = d.Level
 	if !d.Abort {
 		gate.since = time.Time{}
-		log(PhaseHealthCheck, id, fmt.Sprintf("NORMAL nodes=%d/%d ovn=%d/%d oom=%d",
-			h.NodesReady, h.NodesReady+h.NodesNotReady, h.OVNReady, h.OVNPods, h.OOMKilled))
+		log(PhaseHealthCheck, id, fmt.Sprintf("NORMAL nodes=%d/%d · %s oom=%d",
+			h.NodesReady, h.NodesReady+h.NodesNotReady, d.Pulse, h.OOMKilled))
 		return nil
 	}
 	grace := opts.Config.Safety.GracePeriod.Std()
+	// Control-plane / etcd failures: shorter grace — do not keep creating into a dying etcd.
+	if h.MastersNotReady > 0 || (h.EtcdPods > 0 && h.EtcdReady < h.EtcdPods) {
+		if grace > 15*time.Second {
+			grace = 15 * time.Second
+		}
+	}
 	if grace > 0 {
 		if gate.since.IsZero() {
 			gate.since = time.Now()
-			log(PhaseHealthCheck, id, "WARNING "+d.Reason+" (grace "+grace.String()+")")
+			log(PhaseHealthCheck, id, "WARNING "+d.Reason+" · "+d.Pulse+" (grace "+grace.String()+")")
 			br.HealthLevel = "WARNING"
 			return nil
 		}
 		if time.Since(gate.since) < grace {
-			log(PhaseHealthCheck, id, "WARNING "+d.Reason+" (still in grace)")
+			log(PhaseHealthCheck, id, "WARNING "+d.Reason+" · "+d.Pulse+" (still in grace)")
 			br.HealthLevel = "WARNING"
 			return nil
 		}
 	}
 	rep.Aborted = true
 	rep.AbortReason = d.Reason
-	log(PhaseAborted, id, d.Reason)
+	log(PhaseAborted, id, d.Reason+" · "+d.Pulse)
 	return fmt.Errorf("abort: %s", d.Reason)
 }
 

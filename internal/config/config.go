@@ -206,9 +206,11 @@ type Safety struct {
 }
 
 type AbortOn struct {
-	NodeNotReady  bool `yaml:"nodeNotReady"`
-	OOMKilled     bool `yaml:"oomKilled"`
-	CriticalAlert bool `yaml:"criticalAlert"`
+	NodeNotReady   bool `yaml:"nodeNotReady"`
+	MasterNotReady bool `yaml:"masterNotReady"` // control-plane / master roles
+	EtcdUnhealthy  bool `yaml:"etcdUnhealthy"`  // etcd static pods not Ready
+	OOMKilled      bool `yaml:"oomKilled"`
+	CriticalAlert  bool `yaml:"criticalAlert"`
 }
 
 type Thresholds struct {

@@ -20,6 +20,7 @@ const router = createRouter({
         { path: 'report', name: 'report', component: () => import('src/pages/ReportPage.vue') },
         { path: 'cleanup-reports', name: 'cleanup-reports', component: () => import('src/pages/CleanupReportsPage.vue') },
         { path: 'ovn-diagnoser', name: 'ovn-diagnoser', component: () => import('src/pages/OVNDiagnoserPage.vue') },
+        { path: 'etcd-diagnoser', name: 'etcd-diagnoser', component: () => import('src/pages/EtcdDiagnoserPage.vue') },
       ],
     },
   ],

@@ -165,6 +165,7 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 		AllowOverCapacity bool     `json:"allowOverCapacity"`
 		SkipBase          bool     `json:"skipBaseline"`
 		EnableOVNDiag     *bool    `json:"enableOVNDiag"`
+		EnableEtcdDiag    *bool    `json:"enableEtcdDiag"`
 		AvoidTaints       []string `json:"avoidTaints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -304,34 +305,45 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 		batchPlan.Strategy, batchPlan.Size, batchPlan.Count,
 		batchPlan.ObjectsPerWave, batchPlan.ObjectsPerNS, batchPlan.TargetWaveObjs, batchPlan.Reason))
 	if len(cfg.Application.AvoidTaints) == 0 {
-		run.appendLog("info", "SCHED", 0, "avoidTaints=none (pods may land on any node the scheduler allows)")
+		run.appendLog("info", "SCHED", 0, "avoidTaints=none extra · still hard-excludes master/control-plane via nodeAffinity")
 	} else {
 		parts := make([]string, 0, len(cfg.Application.AvoidTaints))
 		for _, t := range cfg.Application.AvoidTaints {
 			parts = append(parts, t.String())
 		}
 		run.appendLog("info", "SCHED", 0, "will NOT tolerate taints: "+strings.Join(parts, ", ")+
-			" · nodeAffinity excludes matching infra/role labels")
+			" · nodeAffinity excludes matching infra/role labels + hard master/control-plane ban")
 	}
 
 	enableOVN := true
 	if body.EnableOVNDiag != nil {
 		enableOVN = *body.EnableOVNDiag
 	}
+	enableEtcd := true
+	if body.EnableEtcdDiag != nil {
+		enableEtcd = *body.EnableEtcdDiag
+	}
 	if enableOVN {
-		run.appendLog("info", "OVNDIAG", 0, "diagnoser samples ENABLED for this run (baseline + watch + per-batch)")
+		run.appendLog("info", "OVNDIAG", 0, "diagnoser samples ENABLED for this run (baseline + per-batch)")
 	} else {
 		run.appendLog("info", "OVNDIAG", 0, "diagnoser samples DISABLED for this run")
 	}
+	if enableEtcd {
+		run.appendLog("info", "ETCDDIAG", 0, "etcd/control-plane samples ENABLED (baseline + per-batch pulse)")
+	} else {
+		run.appendLog("info", "ETCDDIAG", 0, "etcd diagnoser samples DISABLED for this run")
+	}
+	run.appendLog("info", "SCHED", 0, "hard rule: never schedule burn pods on node-role master/control-plane")
 
-	go s.executeRun(ctx, run, cfg, g, body.DryRun, body.SkipBase, enableOVN, target)
+	go s.executeRun(ctx, run, cfg, g, body.DryRun, body.SkipBase, enableOVN, enableEtcd, target)
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"run":           run.snapshot(),
-		"avoidTaints":   cfg.Application.AvoidTaints,
-		"cluster":       target,
-		"capacity":      capacity,
-		"enableOVNDiag": enableOVN,
-		"warning":       "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
+		"run":            run.snapshot(),
+		"avoidTaints":    cfg.Application.AvoidTaints,
+		"cluster":        target,
+		"capacity":       capacity,
+		"enableOVNDiag":  enableOVN,
+		"enableEtcdDiag": enableEtcd,
+		"warning":        "NOT FOR USE ON ANY CLUSTER THAT IS IMPORTANT",
 	})
 }
 
@@ -388,7 +400,7 @@ func SplitBatchCount(cfg *config.Config, ns int) int {
 	return plan.Count
 }
 
-func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun, skipBase, enableOVN bool, target clusterTarget) {
+func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Config, g *topology.Graph, dryRun, skipBase, enableOVN, enableEtcd bool, target clusterTarget) {
 	var (
 		lastRep     *runner.Report
 		openHealth  kube.Health
@@ -482,6 +494,10 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 		s.performOVNJob(ovnJob{kind: "baseline", log: run})
 		run.appendLog("info", "OVNDIAG", 0, "per-batch samples go through the same single-slot worker; no 45s watch loop")
 	}
+	if live, ok := cl.(*kube.Live); ok && live.Clientset() != nil && enableEtcd {
+		run.appendLog("info", "ETCDDIAG", 0, "baseline sample on ETCD worker (masters · etcd · kube-apiserver)")
+		s.performEtcdJob(etcdJob{kind: "baseline", log: run})
+	}
 	}
 
 	if !dryRun && !cfg.IsObjectPressure() {
@@ -570,6 +586,12 @@ func (s *Server) executeRun(ctx context.Context, run *execRun, cfg *config.Confi
 				bid := batch
 				if !s.enqueueOVN("sample", bid, run) {
 					run.appendLog("warn", "OVNDIAG", bid, "OVN worker busy — sample skipped")
+				}
+			}
+			if enableEtcd && !dryRun && (phase == runner.PhaseBatchMeasurement || phase == runner.PhaseFinalMeasurement || phase == runner.PhaseHealthCheck) {
+				bid := batch
+				if !s.enqueueEtcd("sample", bid, run) {
+					run.appendLog("warn", "ETCDDIAG", bid, "ETCD worker busy — sample skipped")
 				}
 			}
 		},
